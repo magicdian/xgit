@@ -322,6 +322,13 @@ pub fn set_category_selected(
     }
 }
 
+pub fn builtin_entry_for_path(path: &str) -> Option<&'static CodeFileTypeEntry> {
+    categories()
+        .iter()
+        .flat_map(|category| category.entries.iter())
+        .find(|entry| matches_path_pattern(path, entry.pattern))
+}
+
 fn builtin_entry_for_rule(rule: &FileRuleConfig) -> Option<&'static CodeFileTypeEntry> {
     categories()
         .iter()
@@ -329,10 +336,19 @@ fn builtin_entry_for_rule(rule: &FileRuleConfig) -> Option<&'static CodeFileType
         .find(|entry| entry.pattern == rule.pattern && entry.renderer == rule.renderer)
 }
 
+fn matches_path_pattern(path: &str, pattern: &str) -> bool {
+    let normalized_path = path.replace('\\', "/");
+    let normalized_pattern = pattern.replace('\\', "/");
+    if let Some(ext) = normalized_pattern.strip_prefix("*.") {
+        return normalized_path.ends_with(&format!(".{ext}"));
+    }
+    normalized_path == normalized_pattern
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        category_state, default_selected_keys, file_rules_from_selection,
+        builtin_entry_for_path, category_state, default_selected_keys, file_rules_from_selection,
         selection_from_file_rules, total_builtin_entry_count, TriState, C_LINE_BLOCK_RENDERER,
     };
     use crate::config::FileRuleConfig;
@@ -410,5 +426,17 @@ mod tests {
             .any(|rule| rule.pattern == "*.java" && rule.renderer == C_LINE_BLOCK_RENDERER));
         assert!(!rules.iter().any(|rule| rule.pattern == "Android.bp"));
         assert_eq!(rules.len(), 12);
+    }
+
+    #[test]
+    fn builtin_entry_for_path_matches_known_builtin_suffix() {
+        let entry = builtin_entry_for_path("networkmgr/routemgr/DnsEvent.cpp")
+            .expect("cpp should be recognized as builtin type");
+        assert_eq!(entry.pattern, "*.cpp");
+    }
+
+    #[test]
+    fn builtin_entry_for_path_returns_none_for_unknown_type() {
+        assert!(builtin_entry_for_path("build/Android.bp").is_none());
     }
 }

@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "xgit"
-version = "2604.1.3"
+version = "2604.1.4"
 dependencies = [
  "anyhow",
  "chrono",

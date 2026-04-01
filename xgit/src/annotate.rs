@@ -1,3 +1,4 @@
+use crate::code_file_types::builtin_entry_for_path;
 use crate::config::{
     AnnotateOldCodeBlockCommentConfig, AnnotateOldCodeLineCommentConfig, AnnotateOldCodeLineLayout,
     AnnotateOldCodeMode, AppConfig, FileRuleConfig,
@@ -69,6 +70,29 @@ struct PreparedCLineFile {
     change: FileChange,
     logical_content: String,
     segments: Vec<HunkSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UnformattedReason {
+    UnsupportedType,
+    BuiltinTypeDisabled,
+    RendererUnimplemented(String),
+    NoTargetContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnformattedFile {
+    path: String,
+    reason: UnformattedReason,
+}
+
+#[derive(Debug, Clone)]
+enum CandidateProcessResult {
+    Prepared {
+        file: PreparedCLineFile,
+        context_candidates: Vec<ContextReuseCandidate>,
+    },
+    Unformatted(UnformattedFile),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -146,73 +170,25 @@ pub fn run(
 
     let mut prepared = Vec::<PreparedCLineFile>::new();
     let mut context_candidates = Vec::<ContextReuseCandidate>::new();
+    let mut unformatted = Vec::<UnformattedFile>::new();
 
     for change in &changes {
-        let renderer = select_renderer(&change.path, &config.annotate.file_rules);
-        match renderer.as_deref() {
-            Some("c_line_block") => {
-                if !options.latest_commit
-                    && !change.from_untracked
-                    && has_unstaged_changes_for_path(&repo_root, &change.path)?
-                {
-                    bail!(
-                        "{}",
-                        catalog.tf(
-                            "error.annotate.staged_unstaged_conflict",
-                            &[("path", change.path.clone())]
-                        )
-                    );
-                }
-
-                let Some(current_content) =
-                    load_target_content(&repo_root, options.latest_commit, change)?
-                else {
-                    println!(
-                        "{}",
-                        catalog.tf("status.annotate.no_rule", &[("path", change.path.clone())])
-                    );
-                    continue;
-                };
-
-                let baseline_content =
-                    load_baseline_content(&repo_root, options.latest_commit, change)?;
-                let normalized = normalize_content_before_render(
-                    &baseline_content,
-                    &current_content,
-                    config,
-                    &change.path,
-                )
-                .with_context(|| {
-                    catalog.tf(
-                        "error.annotate.normalize_failed",
-                        &[("path", change.path.clone())],
-                    )
-                })?;
-
-                context_candidates.extend(normalized.context_candidates.iter().cloned());
-                prepared.push(PreparedCLineFile {
-                    change: change.clone(),
-                    logical_content: normalized.logical_content,
-                    segments: normalized.segments,
-                });
+        match process_candidate_change(
+            change,
+            options.latest_commit,
+            config,
+            catalog,
+            &repo_root,
+        )? {
+            CandidateProcessResult::Prepared {
+                file,
+                context_candidates: file_context_candidates,
+            } => {
+                context_candidates.extend(file_context_candidates);
+                prepared.push(file);
             }
-            Some(other) => {
-                println!(
-                    "{}",
-                    catalog.tf(
-                        "status.annotate.renderer_unimplemented",
-                        &[
-                            ("path", change.path.clone()),
-                            ("renderer", other.to_string()),
-                        ],
-                    )
-                );
-            }
-            None => {
-                println!(
-                    "{}",
-                    catalog.tf("status.annotate.no_rule", &[("path", change.path.clone())])
-                );
+            CandidateProcessResult::Unformatted(item) => {
+                unformatted.push(item);
             }
         }
     }
@@ -245,17 +221,128 @@ pub fn run(
     if options.latest_commit {
         println!("{}", catalog.t("status.annotate.latest_commit_hint"));
     }
-    println!(
-        "{}",
-        catalog.tf(
-            "status.annotate.summary",
-            &[
-                ("count", applied.to_string()),
-                ("total", changes.len().to_string())
-            ],
-        )
-    );
+    for line in build_annotate_report_lines(catalog, applied, &unformatted) {
+        println!("{line}");
+    }
     Ok(())
+}
+
+fn process_candidate_change(
+    change: &FileChange,
+    latest_commit: bool,
+    config: &AppConfig,
+    catalog: &Catalog,
+    repo_root: &Path,
+) -> Result<CandidateProcessResult> {
+    let renderer = select_renderer(&change.path, &config.annotate.file_rules);
+    match renderer.as_deref() {
+        Some("c_line_block") => {
+            if !latest_commit
+                && !change.from_untracked
+                && has_unstaged_changes_for_path(repo_root, &change.path)?
+            {
+                bail!(
+                    "{}",
+                    catalog.tf(
+                        "error.annotate.staged_unstaged_conflict",
+                        &[("path", change.path.clone())]
+                    )
+                );
+            }
+
+            let Some(current_content) = load_target_content(repo_root, latest_commit, change)? else {
+                return Ok(CandidateProcessResult::Unformatted(UnformattedFile {
+                    path: change.path.clone(),
+                    reason: UnformattedReason::NoTargetContent,
+                }));
+            };
+
+            let baseline_content = load_baseline_content(repo_root, latest_commit, change)?;
+            let normalized = normalize_content_before_render(
+                &baseline_content,
+                &current_content,
+                config,
+                &change.path,
+            )
+            .with_context(|| {
+                catalog.tf(
+                    "error.annotate.normalize_failed",
+                    &[("path", change.path.clone())],
+                )
+            })?;
+
+            Ok(CandidateProcessResult::Prepared {
+                file: PreparedCLineFile {
+                    change: change.clone(),
+                    logical_content: normalized.logical_content,
+                    segments: normalized.segments,
+                },
+                context_candidates: normalized.context_candidates,
+            })
+        }
+        Some(other) => Ok(CandidateProcessResult::Unformatted(UnformattedFile {
+            path: change.path.clone(),
+            reason: UnformattedReason::RendererUnimplemented(other.to_string()),
+        })),
+        None => Ok(CandidateProcessResult::Unformatted(UnformattedFile {
+            path: change.path.clone(),
+            reason: classify_missing_rule_reason(&change.path),
+        })),
+    }
+}
+
+fn classify_missing_rule_reason(path: &str) -> UnformattedReason {
+    if builtin_entry_for_path(path).is_some() {
+        UnformattedReason::BuiltinTypeDisabled
+    } else {
+        UnformattedReason::UnsupportedType
+    }
+}
+
+fn format_unformatted_reason(reason: &UnformattedReason, catalog: &Catalog) -> String {
+    match reason {
+        UnformattedReason::UnsupportedType => {
+            catalog.t("status.annotate.unformatted_reason.unsupported_type")
+        }
+        UnformattedReason::BuiltinTypeDisabled => {
+            catalog.t("status.annotate.unformatted_reason.builtin_type_disabled")
+        }
+        UnformattedReason::RendererUnimplemented(renderer) => catalog.tf(
+            "status.annotate.unformatted_reason.renderer_unimplemented",
+            &[("renderer", renderer.clone())],
+        ),
+        UnformattedReason::NoTargetContent => {
+            catalog.t("status.annotate.unformatted_reason.no_target_content")
+        }
+    }
+}
+
+fn build_annotate_report_lines(
+    catalog: &Catalog,
+    rendered_count: usize,
+    unformatted: &[UnformattedFile],
+) -> Vec<String> {
+    let mut lines = vec![catalog.tf(
+        "status.annotate.summary",
+        &[
+            ("rendered", rendered_count.to_string()),
+            ("unformatted", unformatted.len().to_string()),
+        ],
+    )];
+    if unformatted.is_empty() {
+        return lines;
+    }
+    lines.push(catalog.t("status.annotate.unformatted_header"));
+    for item in unformatted {
+        lines.push(catalog.tf(
+            "status.annotate.unformatted_item",
+            &[
+                ("path", item.path.clone()),
+                ("reason", format_unformatted_reason(&item.reason, catalog)),
+            ],
+        ));
+    }
+    lines
 }
 
 fn resolve_git_root(cwd: &Path) -> Result<PathBuf> {
@@ -1723,11 +1810,12 @@ fn matches_pattern(path: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_c_line_segments, collect_latest_commit_changes, collect_runtime_context,
-        collect_staged_changes, git_stdout, load_baseline_content, matches_pattern,
-        normalize_content_before_render, parse_hunk_segments, parse_name_status_output,
-        resolve_reusable_context_defaults, run, select_renderer, ChangeKind, ContextReuseCandidate,
-        FileChange, HunkSegment, RuntimeContext,
+        apply_c_line_segments, build_annotate_report_lines, classify_missing_rule_reason,
+        collect_latest_commit_changes, collect_runtime_context, collect_staged_changes, git_stdout,
+        load_baseline_content, matches_pattern, normalize_content_before_render,
+        parse_hunk_segments, parse_name_status_output, resolve_reusable_context_defaults, run,
+        select_renderer, ChangeKind, ContextReuseCandidate, FileChange, HunkSegment, RuntimeContext,
+        UnformattedFile, UnformattedReason,
     };
     use crate::code_file_types::{default_selected_keys, file_rules_from_selection};
     use crate::config::{merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig};
@@ -1802,6 +1890,59 @@ index a1b2c3d..e4f5a6b 100644
             Some("c_line_block".to_string())
         );
         assert_eq!(select_renderer("build/Android.bp", &rules), None);
+    }
+
+    #[test]
+    fn classify_missing_rule_marks_unknown_type_as_unsupported() {
+        assert_eq!(
+            classify_missing_rule_reason("build/Android.bp"),
+            UnformattedReason::UnsupportedType
+        );
+    }
+
+    #[test]
+    fn classify_missing_rule_marks_builtin_suffix_as_disabled() {
+        assert_eq!(
+            classify_missing_rule_reason("networkmgr/routemgr/DnsEvent.cpp"),
+            UnformattedReason::BuiltinTypeDisabled
+        );
+    }
+
+    #[test]
+    fn annotate_report_lists_reasons_for_unformatted_files() {
+        let catalog = crate::i18n::load_catalog("zh-CN", Path::new(".")).unwrap();
+        let lines = build_annotate_report_lines(
+            &catalog,
+            1,
+            &[
+                UnformattedFile {
+                    path: "build/Android.bp".to_string(),
+                    reason: UnformattedReason::UnsupportedType,
+                },
+                UnformattedFile {
+                    path: "src/demo.cpp".to_string(),
+                    reason: UnformattedReason::BuiltinTypeDisabled,
+                },
+                UnformattedFile {
+                    path: "src/custom.proto".to_string(),
+                    reason: UnformattedReason::RendererUnimplemented(
+                        "proto_line_block".to_string(),
+                    ),
+                },
+            ],
+        );
+        let output = lines.join("\n");
+        assert!(output.contains("未格式化：build/Android.bp (不支持该类型)"));
+        assert!(output.contains("未格式化：src/demo.cpp (设置未开启该后缀功能)"));
+        assert!(output.contains("命中了尚未实现的渲染器 'proto_line_block'"));
+    }
+
+    #[test]
+    fn annotate_report_hides_unformatted_list_when_count_is_zero() {
+        let catalog = crate::i18n::load_catalog("zh-CN", Path::new(".")).unwrap();
+        let lines = build_annotate_report_lines(&catalog, 2, &[]);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("已渲染 2，未格式化 0"));
     }
 
     #[test]
