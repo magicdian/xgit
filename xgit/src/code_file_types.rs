@@ -33,7 +33,7 @@ pub struct CodeFileTypeSelection {
 
 pub const C_LINE_BLOCK_RENDERER: &str = "c_line_block";
 
-const C_CPP_ENTRIES: [CodeFileTypeEntry; 3] = [
+const C_CPP_ENTRIES: [CodeFileTypeEntry; 11] = [
     CodeFileTypeEntry {
         key: "c_cpp/c",
         label_key: "setup.code_file_type.entry.c_cpp.c",
@@ -55,6 +55,62 @@ const C_CPP_ENTRIES: [CodeFileTypeEntry; 3] = [
         pattern: "*.cpp",
         renderer: C_LINE_BLOCK_RENDERER,
     },
+    CodeFileTypeEntry {
+        key: "c_cpp/cc",
+        label_key: "setup.code_file_type.entry.c_cpp.cc",
+        default_label: ".cc",
+        pattern: "*.cc",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "c_cpp/cxx",
+        label_key: "setup.code_file_type.entry.c_cpp.cxx",
+        default_label: ".cxx",
+        pattern: "*.cxx",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "c_cpp/hpp",
+        label_key: "setup.code_file_type.entry.c_cpp.hpp",
+        default_label: ".hpp",
+        pattern: "*.hpp",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "c_cpp/hh",
+        label_key: "setup.code_file_type.entry.c_cpp.hh",
+        default_label: ".hh",
+        pattern: "*.hh",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "c_cpp/hxx",
+        label_key: "setup.code_file_type.entry.c_cpp.hxx",
+        default_label: ".hxx",
+        pattern: "*.hxx",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "c_cpp/ipp",
+        label_key: "setup.code_file_type.entry.c_cpp.ipp",
+        default_label: ".ipp",
+        pattern: "*.ipp",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "c_cpp/inl",
+        label_key: "setup.code_file_type.entry.c_cpp.inl",
+        default_label: ".inl",
+        pattern: "*.inl",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "c_cpp/tpp",
+        label_key: "setup.code_file_type.entry.c_cpp.tpp",
+        default_label: ".tpp",
+        pattern: "*.tpp",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
 ];
 
 const JAVA_ENTRIES: [CodeFileTypeEntry; 1] = [CodeFileTypeEntry {
@@ -65,13 +121,36 @@ const JAVA_ENTRIES: [CodeFileTypeEntry; 1] = [CodeFileTypeEntry {
     renderer: C_LINE_BLOCK_RENDERER,
 }];
 
-const JAVASCRIPT_ENTRIES: [CodeFileTypeEntry; 1] = [CodeFileTypeEntry {
-    key: "javascript/js",
-    label_key: "setup.code_file_type.entry.javascript.js",
-    default_label: ".js",
-    pattern: "*.js",
-    renderer: C_LINE_BLOCK_RENDERER,
-}];
+const JAVASCRIPT_ENTRIES: [CodeFileTypeEntry; 4] = [
+    CodeFileTypeEntry {
+        key: "javascript/js",
+        label_key: "setup.code_file_type.entry.javascript.js",
+        default_label: ".js",
+        pattern: "*.js",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "javascript/mjs",
+        label_key: "setup.code_file_type.entry.javascript.mjs",
+        default_label: ".mjs",
+        pattern: "*.mjs",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "javascript/cjs",
+        label_key: "setup.code_file_type.entry.javascript.cjs",
+        default_label: ".cjs",
+        pattern: "*.cjs",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "javascript/jsx",
+        label_key: "setup.code_file_type.entry.javascript.jsx",
+        default_label: ".jsx",
+        pattern: "*.jsx",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+];
 
 const RUST_ENTRIES: [CodeFileTypeEntry; 1] = [CodeFileTypeEntry {
     key: "rust/rs",
@@ -81,13 +160,22 @@ const RUST_ENTRIES: [CodeFileTypeEntry; 1] = [CodeFileTypeEntry {
     renderer: C_LINE_BLOCK_RENDERER,
 }];
 
-const KOTLIN_ENTRIES: [CodeFileTypeEntry; 1] = [CodeFileTypeEntry {
-    key: "kotlin/kt",
-    label_key: "setup.code_file_type.entry.kotlin.kt",
-    default_label: ".kt",
-    pattern: "*.kt",
-    renderer: C_LINE_BLOCK_RENDERER,
-}];
+const KOTLIN_ENTRIES: [CodeFileTypeEntry; 2] = [
+    CodeFileTypeEntry {
+        key: "kotlin/kt",
+        label_key: "setup.code_file_type.entry.kotlin.kt",
+        default_label: ".kt",
+        pattern: "*.kt",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+    CodeFileTypeEntry {
+        key: "kotlin/kts",
+        label_key: "setup.code_file_type.entry.kotlin.kts",
+        default_label: ".kts",
+        pattern: "*.kts",
+        renderer: C_LINE_BLOCK_RENDERER,
+    },
+];
 
 const BUILTIN_CATEGORIES: [CodeFileTypeCategory; 5] = [
     CodeFileTypeCategory {
@@ -140,6 +228,11 @@ pub fn default_selected_keys() -> BTreeSet<String> {
         .flat_map(|category| category.entries.iter())
         .map(|entry| entry.key.to_string())
         .collect()
+}
+
+pub fn builtin_default_file_rules() -> Vec<FileRuleConfig> {
+    let default_keys = default_selected_keys();
+    file_rules_from_selection(&default_keys, &[])
 }
 
 pub fn selection_from_file_rules(rules: &[FileRuleConfig]) -> CodeFileTypeSelection {
@@ -240,7 +333,7 @@ fn builtin_entry_for_rule(rule: &FileRuleConfig) -> Option<&'static CodeFileType
 mod tests {
     use super::{
         category_state, default_selected_keys, file_rules_from_selection,
-        selection_from_file_rules, total_builtin_entry_count, TriState,
+        selection_from_file_rules, total_builtin_entry_count, TriState, C_LINE_BLOCK_RENDERER,
     };
     use crate::config::FileRuleConfig;
     use std::collections::BTreeSet;
@@ -251,8 +344,10 @@ mod tests {
         assert!(selected.contains("c_cpp/c"));
         assert!(selected.contains("c_cpp/h"));
         assert!(selected.contains("c_cpp/cpp"));
+        assert!(selected.contains("c_cpp/hpp"));
+        assert!(selected.contains("c_cpp/tpp"));
         assert!(selected.contains("java/java"));
-        assert_eq!(selected.len(), 4);
+        assert_eq!(selected.len(), 12);
     }
 
     #[test]
@@ -300,6 +395,20 @@ mod tests {
 
     #[test]
     fn total_count_matches_catalog() {
-        assert_eq!(total_builtin_entry_count(), 7);
+        assert_eq!(total_builtin_entry_count(), 19);
+    }
+
+    #[test]
+    fn builtin_default_rules_follow_default_selection_without_non_code_files() {
+        let rules = super::builtin_default_file_rules();
+
+        assert!(rules
+            .iter()
+            .any(|rule| rule.pattern == "*.hpp" && rule.renderer == C_LINE_BLOCK_RENDERER));
+        assert!(rules
+            .iter()
+            .any(|rule| rule.pattern == "*.java" && rule.renderer == C_LINE_BLOCK_RENDERER));
+        assert!(!rules.iter().any(|rule| rule.pattern == "Android.bp"));
+        assert_eq!(rules.len(), 12);
     }
 }

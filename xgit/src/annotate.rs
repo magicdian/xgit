@@ -460,10 +460,7 @@ fn resolve_reusable_context_defaults(
     })
 }
 
-fn normalize_context_candidate(
-    candidate: &mut ContextReuseCandidate,
-    reference_kinds: &[String],
-) {
+fn normalize_context_candidate(candidate: &mut ContextReuseCandidate, reference_kinds: &[String]) {
     let Some(reference_kind) = candidate.reference_kind.clone() else {
         return;
     };
@@ -620,9 +617,8 @@ fn build_pattern_line(template_line: &str) -> Result<PatternLine> {
     Ok(PatternLine {
         matcher: Regex::new(&template_line_to_match_regex(template_line))
             .with_context(|| format!("invalid matcher regex for template line: {template_line}"))?,
-        capture: Regex::new(&template_line_to_capture_regex(template_line)).with_context(|| {
-            format!("invalid capture regex for template line: {template_line}")
-        })?,
+        capture: Regex::new(&template_line_to_capture_regex(template_line))
+            .with_context(|| format!("invalid capture regex for template line: {template_line}"))?,
     })
 }
 
@@ -655,7 +651,9 @@ fn tokenize_template_line(template_line: &str) -> Vec<TemplateToken> {
         if !name.is_empty() && name.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_') {
             tokens.push(TemplateToken::Placeholder(name.to_string()));
         } else {
-            tokens.push(TemplateToken::Literal(template_line[start..=close].to_string()));
+            tokens.push(TemplateToken::Literal(
+                template_line[start..=close].to_string(),
+            ));
         }
         cursor = close + 1;
     }
@@ -716,7 +714,9 @@ fn find_candidate_blocks(
     for line_idx in 0..lines.len() {
         let mut matches = Vec::new();
         for pattern in block_patterns {
-            if let Some((indent, context_candidate)) = try_match_block_start(lines, line_idx, pattern) {
+            if let Some((indent, context_candidate)) =
+                try_match_block_start(lines, line_idx, pattern)
+            {
                 matches.push((pattern, indent, context_candidate));
             }
         }
@@ -729,7 +729,11 @@ fn find_candidate_blocks(
         let start_len = pattern.start_lines.len();
         let search_start = line_idx + start_len;
         let Some(end_start) = find_matching_end(lines, search_start, pattern, &indent) else {
-            bail!("{}: unmatched annotation block start at line {}", path, line_idx + 1);
+            bail!(
+                "{}: unmatched annotation block start at line {}",
+                path,
+                line_idx + 1
+            );
         };
         let end_len = pattern.end_lines.len();
         let end_line = end_start + end_len;
@@ -753,7 +757,11 @@ fn find_candidate_blocks(
                 bail!("{}: delete block contains ambiguous code body", path);
             }
         } else if code_start_line >= code_end_line {
-            bail!("{}: block at line {} has empty code body", path, line_idx + 1);
+            bail!(
+                "{}: block at line {} has empty code body",
+                path,
+                line_idx + 1
+            );
         }
 
         let mut shell_lines = Vec::new();
@@ -827,12 +835,15 @@ fn match_pattern_with_indent(
     if start + pattern_lines.len() > lines.len() {
         return false;
     }
-    pattern_lines.iter().enumerate().all(|(offset, pattern_line)| {
-        lines
-            .get(start + offset)
-            .and_then(|line| line.strip_prefix(indent))
-            .is_some_and(|content| pattern_line.matcher.is_match(content))
-    })
+    pattern_lines
+        .iter()
+        .enumerate()
+        .all(|(offset, pattern_line)| {
+            lines
+                .get(start + offset)
+                .and_then(|line| line.strip_prefix(indent))
+                .is_some_and(|content| pattern_line.matcher.is_match(content))
+        })
 }
 
 fn find_matching_end(
@@ -886,7 +897,9 @@ fn parse_old_region_len(
             &config.annotate.old_code.block_comment,
             indent,
         )
-        .with_context(|| format!("{path}: failed to parse block-comment old region at line {start_line}")),
+        .with_context(|| {
+            format!("{path}: failed to parse block-comment old region at line {start_line}")
+        }),
         None => {
             if start_contains_old_placeholder {
                 return Ok(0);
@@ -1097,7 +1110,10 @@ fn render_block_without_shell(
     )
 }
 
-fn diff_segments_between_contents(baseline_content: &str, current_content: &str) -> Result<Vec<HunkSegment>> {
+fn diff_segments_between_contents(
+    baseline_content: &str,
+    current_content: &str,
+) -> Result<Vec<HunkSegment>> {
     let patch = diff_patch_between_contents(baseline_content, current_content)?;
     Ok(parse_hunk_segments(&patch))
 }
@@ -1710,9 +1726,10 @@ mod tests {
         apply_c_line_segments, collect_latest_commit_changes, collect_runtime_context,
         collect_staged_changes, git_stdout, load_baseline_content, matches_pattern,
         normalize_content_before_render, parse_hunk_segments, parse_name_status_output,
-        resolve_reusable_context_defaults, run, ChangeKind, ContextReuseCandidate, FileChange,
-        HunkSegment, RuntimeContext,
+        resolve_reusable_context_defaults, run, select_renderer, ChangeKind, ContextReuseCandidate,
+        FileChange, HunkSegment, RuntimeContext,
     };
+    use crate::code_file_types::{default_selected_keys, file_rules_from_selection};
     use crate::config::{merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig};
     use chrono::NaiveDateTime;
     use std::collections::HashMap;
@@ -1759,6 +1776,32 @@ index a1b2c3d..e4f5a6b 100644
     fn windows_path_pattern_match() {
         assert!(matches_pattern(r"src\main.c", "*.c"));
         assert!(matches_pattern(r"src\main.c", r"src/main.c"));
+    }
+
+    #[test]
+    fn expanded_code_file_rules_match_code_files_but_not_android_bp() {
+        let mut selected = default_selected_keys();
+        selected.insert("javascript/mjs".to_string());
+        selected.insert("kotlin/kts".to_string());
+
+        let rules = file_rules_from_selection(&selected, &[]);
+
+        assert_eq!(
+            select_renderer(
+                "networkmgr/routemgr/include/proxy_messsage_handler.hpp",
+                &rules
+            ),
+            Some("c_line_block".to_string())
+        );
+        assert_eq!(
+            select_renderer("web/src/app.mjs", &rules),
+            Some("c_line_block".to_string())
+        );
+        assert_eq!(
+            select_renderer("gradle/build.kts", &rules),
+            Some("c_line_block".to_string())
+        );
+        assert_eq!(select_renderer("build/Android.bp", &rules), None);
     }
 
     #[test]
@@ -2313,7 +2356,8 @@ end = "//@}"
         let baseline = "";
         let current =
             "// add first\n// add first\nint a = 1;\n// end add\nint b = 2;\n// end add\n";
-        let normalized = normalize_content_before_render(baseline, current, &cfg, "demo.c").unwrap();
+        let normalized =
+            normalize_content_before_render(baseline, current, &cfg, "demo.c").unwrap();
         assert_eq!(normalized.logical_content, "int a = 1;\nint b = 2;\n");
         assert_eq!(normalized.segments.len(), 1);
         assert_eq!(normalized.segments[0].kind, ChangeKind::Add);
@@ -2347,8 +2391,7 @@ end = "//@}"
         cfg.annotate.old_code.mode = None;
 
         let baseline_modify = "int a = 1;\n";
-        let current_modify =
-            "// modify old\n// old:\n//   int a = 1;\nint a = 3;\n// end modify\n";
+        let current_modify = "// modify old\n// old:\n//   int a = 1;\nint a = 3;\n// end modify\n";
         let normalized_modify =
             normalize_content_before_render(baseline_modify, current_modify, &cfg, "demo.c")
                 .unwrap();
@@ -2379,11 +2422,15 @@ end = "//@}"
 
         let baseline = "// add old\nint a = 1;\n// end add\n";
         let current = "// add old\nint a = 1;\nint b = 2;\n// end add\n";
-        let normalized = normalize_content_before_render(baseline, current, &cfg, "demo.c").unwrap();
+        let normalized =
+            normalize_content_before_render(baseline, current, &cfg, "demo.c").unwrap();
         assert_eq!(normalized.logical_content, current);
         assert_eq!(normalized.segments.len(), 1);
         assert_eq!(normalized.segments[0].kind, ChangeKind::Add);
-        assert_eq!(normalized.segments[0].new_lines, vec!["int b = 2;".to_string()]);
+        assert_eq!(
+            normalized.segments[0].new_lines,
+            vec!["int b = 2;".to_string()]
+        );
     }
 
     #[test]

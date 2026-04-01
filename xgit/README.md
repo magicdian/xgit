@@ -3,7 +3,7 @@ xgit — 可配置的 Git 开发辅助工具
 ## 版本维护
 - 单一版本来源：`Cargo.toml` 的 `[package].version`
 - CLI 版本输出（`xgit --version`）直接读取 Cargo 包版本
-- 推荐可以使用日期化命名约定 `YYMM.DD.BuildNumber`，但必须保持 Cargo 兼容；当前落地写法：`2604.1.2`（语义对应 `2604.01.2`）
+- 推荐可以使用日期化命名约定 `YYMM.DD.BuildNumber`，但必须保持 Cargo 兼容；当前落地写法：`2604.1.3`（语义对应 `2604.01.3`）
 
 ## 主要能力
 - `push`：自动识别 remote 并执行推送

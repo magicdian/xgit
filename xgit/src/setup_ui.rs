@@ -1336,6 +1336,7 @@ mod tests {
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
         let picker = state.code_file_type_picker.as_ref().unwrap();
         assert!(picker.selected_keys.contains("c_cpp/c"));
+        assert!(picker.selected_keys.contains("c_cpp/hpp"));
         assert!(picker.selected_keys.contains("java/java"));
 
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
@@ -1389,12 +1390,37 @@ mod tests {
             .annotate
             .file_rules
             .iter()
+            .any(|rule| rule.pattern == "*.hpp" && rule.renderer == "c_line_block"));
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
             .any(|rule| rule.pattern == "*.java" && rule.renderer == "c_line_block"));
         assert!(config
             .annotate
             .file_rules
             .iter()
             .any(|rule| rule.pattern == "*.js" && rule.renderer == "c_line_block"));
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.mjs" && rule.renderer == "c_line_block"));
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.cjs" && rule.renderer == "c_line_block"));
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.jsx" && rule.renderer == "c_line_block"));
+        assert!(!config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "Android.bp"));
         assert!(config
             .annotate
             .file_rules

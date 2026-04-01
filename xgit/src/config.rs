@@ -1,3 +1,4 @@
+use crate::code_file_types::builtin_default_file_rules;
 use crate::i18n;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -193,24 +194,7 @@ impl Default for AnnotateConfig {
             render: AnnotateRenderConfig::default(),
             old_code: AnnotateOldCodeConfig::default(),
             block_templates: BlockTemplates::default(),
-            file_rules: vec![
-                FileRuleConfig {
-                    pattern: "*.c".to_string(),
-                    renderer: "c_line_block".to_string(),
-                },
-                FileRuleConfig {
-                    pattern: "*.h".to_string(),
-                    renderer: "c_line_block".to_string(),
-                },
-                FileRuleConfig {
-                    pattern: "*.cpp".to_string(),
-                    renderer: "c_line_block".to_string(),
-                },
-                FileRuleConfig {
-                    pattern: "*.java".to_string(),
-                    renderer: "c_line_block".to_string(),
-                },
-            ],
+            file_rules: builtin_default_file_rules(),
         }
     }
 }

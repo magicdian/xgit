@@ -56,5 +56,37 @@ pattern = "*.cpp"
 renderer = "c_line_block"
 
 [[annotate.file_rules]]
+pattern = "*.cc"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.cxx"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.hpp"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.hh"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.hxx"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.ipp"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.inl"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.tpp"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
 pattern = "*.java"
 renderer = "c_line_block"
