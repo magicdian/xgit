@@ -2,7 +2,9 @@ use crate::code_file_types::{
     categories, category_selected_count, category_state, file_rules_from_selection,
     selection_from_file_rules, set_category_selected, total_builtin_entry_count, TriState,
 };
-use crate::config::{save_config, AppConfig, FileRuleConfig};
+use crate::config::{
+    save_config, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig, FileRuleConfig,
+};
 use crate::i18n::Catalog;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -721,7 +723,7 @@ fn field_count(section: usize, _config: &AppConfig) -> usize {
         1 => 2,
         2 => 1,
         3 => 3,
-        4 => 12,
+        4 => 20,
         _ => 0,
     }
 }
@@ -828,6 +830,49 @@ fn field_lines(catalog: &Catalog, config: &AppConfig, section: usize) -> Vec<Str
                 catalog.t("setup.field.annotate.template_del_end"),
                 config.annotate.block_templates.del.end
             ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.date_format"),
+                config.annotate.date.format
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.old_code_mode"),
+                old_code_mode_text(catalog, config.annotate.old_code.mode.as_ref())
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.old_code_line_layout"),
+                old_code_line_layout_text(
+                    catalog,
+                    config.annotate.old_code.line_comment.layout.clone()
+                )
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.old_code_line_header"),
+                config.annotate.old_code.line_comment.header
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.old_code_line_body_prefix"),
+                config.annotate.old_code.line_comment.body_prefix
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.old_code_line_body_suffix"),
+                config.annotate.old_code.line_comment.body_suffix
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.old_code_block_title"),
+                config.annotate.old_code.block_comment.title
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.old_code_block_body_prefix"),
+                config.annotate.old_code.block_comment.body_prefix
+            ),
         ],
         _ => vec![],
     }
@@ -874,6 +919,46 @@ fn language_value(catalog: &Catalog, value: &str) -> String {
     }
 }
 
+fn old_code_mode_text(catalog: &Catalog, mode: Option<&AnnotateOldCodeMode>) -> String {
+    match mode {
+        None => catalog.t("setup.value.annotate.old_code_mode.legacy"),
+        Some(AnnotateOldCodeMode::None) => catalog.t("setup.value.annotate.old_code_mode.none"),
+        Some(AnnotateOldCodeMode::LineComment) => {
+            catalog.t("setup.value.annotate.old_code_mode.line_comment")
+        }
+        Some(AnnotateOldCodeMode::BlockComment) => {
+            catalog.t("setup.value.annotate.old_code_mode.block_comment")
+        }
+    }
+}
+
+fn old_code_line_layout_text(catalog: &Catalog, layout: AnnotateOldCodeLineLayout) -> String {
+    match layout {
+        AnnotateOldCodeLineLayout::PerLine => {
+            catalog.t("setup.value.annotate.old_code_line_layout.per_line")
+        }
+        AnnotateOldCodeLineLayout::HeaderBody => {
+            catalog.t("setup.value.annotate.old_code_line_layout.header_body")
+        }
+    }
+}
+
+fn cycle_old_code_mode(mode: Option<AnnotateOldCodeMode>) -> Option<AnnotateOldCodeMode> {
+    match mode {
+        None => Some(AnnotateOldCodeMode::LineComment),
+        Some(AnnotateOldCodeMode::LineComment) => Some(AnnotateOldCodeMode::BlockComment),
+        Some(AnnotateOldCodeMode::BlockComment) => Some(AnnotateOldCodeMode::None),
+        Some(AnnotateOldCodeMode::None) => None,
+    }
+}
+
+fn cycle_old_code_line_layout(layout: AnnotateOldCodeLineLayout) -> AnnotateOldCodeLineLayout {
+    match layout {
+        AnnotateOldCodeLineLayout::PerLine => AnnotateOldCodeLineLayout::HeaderBody,
+        AnnotateOldCodeLineLayout::HeaderBody => AnnotateOldCodeLineLayout::PerLine,
+    }
+}
+
 fn toggle_field(config: &mut AppConfig, section: usize, field: usize) -> bool {
     match (section, field) {
         (0, 0) => {
@@ -905,6 +990,16 @@ fn toggle_field(config: &mut AppConfig, section: usize, field: usize) -> bool {
             config.annotate.render.wrap_blank_lines = !config.annotate.render.wrap_blank_lines;
             true
         }
+        (4, 13) => {
+            config.annotate.old_code.mode =
+                cycle_old_code_mode(config.annotate.old_code.mode.clone());
+            true
+        }
+        (4, 14) => {
+            config.annotate.old_code.line_comment.layout =
+                cycle_old_code_line_layout(config.annotate.old_code.line_comment.layout.clone());
+            true
+        }
         _ => false,
     }
 }
@@ -923,6 +1018,12 @@ fn get_text(config: &AppConfig, section: usize, field: usize) -> Option<String> 
         (4, 9) => Some(config.annotate.block_templates.modify.end.clone()),
         (4, 10) => Some(config.annotate.block_templates.del.start.clone()),
         (4, 11) => Some(config.annotate.block_templates.del.end.clone()),
+        (4, 12) => Some(config.annotate.date.format.clone()),
+        (4, 15) => Some(config.annotate.old_code.line_comment.header.clone()),
+        (4, 16) => Some(config.annotate.old_code.line_comment.body_prefix.clone()),
+        (4, 17) => Some(config.annotate.old_code.line_comment.body_suffix.clone()),
+        (4, 18) => Some(config.annotate.old_code.block_comment.title.clone()),
+        (4, 19) => Some(config.annotate.old_code.block_comment.body_prefix.clone()),
         _ => None,
     }
 }
@@ -945,6 +1046,12 @@ fn apply_text(config: &mut AppConfig, section: usize, field: usize, value: Strin
         (4, 9) => config.annotate.block_templates.modify.end = value,
         (4, 10) => config.annotate.block_templates.del.start = value,
         (4, 11) => config.annotate.block_templates.del.end = value,
+        (4, 12) => config.annotate.date.format = value,
+        (4, 15) => config.annotate.old_code.line_comment.header = value,
+        (4, 16) => config.annotate.old_code.line_comment.body_prefix = value,
+        (4, 17) => config.annotate.old_code.line_comment.body_suffix = value,
+        (4, 18) => config.annotate.old_code.block_comment.title = value,
+        (4, 19) => config.annotate.old_code.block_comment.body_prefix = value,
         _ => {}
     }
 }
@@ -979,7 +1086,7 @@ impl Drop for TerminalGuard {
 mod tests {
     use super::{handle_key_code, Focus, SetupState};
     use crate::code_file_types::{categories, category_state, TriState};
-    use crate::config::{AppConfig, FileRuleConfig};
+    use crate::config::{AnnotateOldCodeMode, AppConfig, FileRuleConfig};
     use crate::i18n;
     use crossterm::event::KeyCode;
     use std::path::Path;
@@ -1113,6 +1220,37 @@ mod tests {
         assert!(raw.contains("start = \"// custom add {@\""));
         assert!(raw.contains("end = \"//@}\""));
         assert!(!raw.contains("[annotate.policies]"));
+    }
+
+    #[test]
+    fn save_writes_date_and_old_code_model_for_annotate() {
+        let catalog = test_catalog();
+        let tmp = TempDir::new().unwrap();
+        let target_path = tmp.path().join("config.toml");
+        let mut config = AppConfig::default();
+        config.annotate.date.format = "dd/mm/yyyy".to_string();
+        config.annotate.old_code.mode = Some(AnnotateOldCodeMode::BlockComment);
+        config.annotate.old_code.block_comment.title = "cover old codes".to_string();
+        config.annotate.old_code.block_comment.body_prefix = "| ".to_string();
+        let mut state = SetupState::default();
+
+        handle_key_code(
+            KeyCode::Char('s'),
+            &catalog,
+            &target_path,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
+
+        let raw = std::fs::read_to_string(&target_path).unwrap();
+        assert!(raw.contains("[annotate.date]"));
+        assert!(raw.contains("format = \"dd/mm/yyyy\""));
+        assert!(raw.contains("[annotate.old_code]"));
+        assert!(raw.contains("mode = \"block_comment\""));
+        assert!(raw.contains("[annotate.old_code.block_comment]"));
+        assert!(raw.contains("title = \"cover old codes\""));
+        assert!(raw.contains("body_prefix = \"| \""));
     }
 
     #[test]

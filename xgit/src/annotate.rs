@@ -1,12 +1,15 @@
-use crate::config::{AppConfig, FileRuleConfig};
+use crate::config::{
+    AnnotateOldCodeBlockCommentConfig, AnnotateOldCodeLineCommentConfig, AnnotateOldCodeLineLayout,
+    AnnotateOldCodeMode, AppConfig, FileRuleConfig,
+};
 use crate::i18n::Catalog;
 use anyhow::{anyhow, bail, Context, Result};
+use chrono::{Local, NaiveDateTime};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 pub struct AnnotateOptions {
@@ -226,7 +229,7 @@ fn collect_runtime_context(
         reference_kind,
         reference_value,
         author_tag: resolve_author_tag(cwd, config),
-        date: current_timestamp_tag(),
+        date: current_date_tag(&config.annotate.date.format),
     })
 }
 
@@ -247,11 +250,24 @@ fn resolve_author_tag(cwd: &Path, config: &AppConfig) -> String {
     "unknown".to_string()
 }
 
-fn current_timestamp_tag() -> String {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(value) => value.as_secs().to_string(),
-        Err(_) => "0".to_string(),
-    }
+fn current_date_tag(format: &str) -> String {
+    let now = Local::now().naive_local();
+    format_date_tag(format, now)
+}
+
+fn format_date_tag(format: &str, value: NaiveDateTime) -> String {
+    let chrono_format = to_chrono_date_format(format);
+    value.format(&chrono_format).to_string()
+}
+
+fn to_chrono_date_format(format: &str) -> String {
+    format
+        .replace("yyyy", "%Y")
+        .replace("yy", "%y")
+        .replace("mm", "%m")
+        .replace("dd", "%d")
+        .replace("HH", "%H")
+        .replace("MM", "%M")
 }
 
 fn prompt_line(prompt: &str) -> Result<String> {
@@ -571,6 +587,9 @@ fn render_c_line_block(
     path: &str,
     code_lines_range: Option<(usize, usize)>,
 ) -> (Vec<String>, Vec<String>) {
+    let explicit_old_code_mode = config.annotate.old_code.mode.clone();
+    let old_value_override = explicit_old_code_mode.as_ref().map(|_| "");
+
     let (start_template, end_template) = match segment.kind {
         ChangeKind::Add => (
             &config.annotate.block_templates.add.start,
@@ -590,6 +609,7 @@ fn render_c_line_block(
         context,
         segment.kind.key(),
         path,
+        old_value_override,
         &segment.old_lines,
         &segment.new_lines,
     );
@@ -598,6 +618,7 @@ fn render_c_line_block(
         context,
         segment.kind.key(),
         path,
+        old_value_override,
         &segment.old_lines,
         &segment.new_lines,
     );
@@ -607,13 +628,31 @@ fn render_c_line_block(
         .lines()
         .map(|line| format!("{}{}", comment_indent, line))
         .collect::<Vec<_>>();
-    if (segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete)
-        && !segment.old_lines.is_empty()
-        && !start_template.contains("{old}")
-    {
-        prefix.push(c_line_comment("old:", comment_indent.as_str()));
-        for old in &segment.old_lines {
-            prefix.push(c_line_comment(&format!("  {old}"), comment_indent.as_str()));
+    if segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete {
+        match explicit_old_code_mode {
+            Some(AnnotateOldCodeMode::None) => {}
+            Some(AnnotateOldCodeMode::LineComment) => {
+                prefix.extend(render_old_code_line_comment(
+                    &segment.old_lines,
+                    &config.annotate.old_code.line_comment,
+                    comment_indent.as_str(),
+                ));
+            }
+            Some(AnnotateOldCodeMode::BlockComment) => {
+                prefix.extend(render_old_code_block_comment(
+                    &segment.old_lines,
+                    &config.annotate.old_code.block_comment,
+                    comment_indent.as_str(),
+                ));
+            }
+            None => {
+                if !segment.old_lines.is_empty() && !start_template.contains("{old}") {
+                    prefix.push(c_line_comment("old:", comment_indent.as_str()));
+                    for old in &segment.old_lines {
+                        prefix.push(c_line_comment(&format!("  {old}"), comment_indent.as_str()));
+                    }
+                }
+            }
         }
     }
 
@@ -630,6 +669,54 @@ fn c_line_comment(content: &str, indent: &str) -> String {
     } else {
         format!("{indent}// {content}")
     }
+}
+
+fn render_old_code_line_comment(
+    old_lines: &[String],
+    config: &AnnotateOldCodeLineCommentConfig,
+    indent: &str,
+) -> Vec<String> {
+    if old_lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    if config.layout == AnnotateOldCodeLineLayout::HeaderBody && !config.header.trim().is_empty() {
+        lines.push(c_line_comment(config.header.as_str(), indent));
+    }
+    for old_line in old_lines {
+        lines.push(c_line_comment(
+            format!("{}{}{}", config.body_prefix, old_line, config.body_suffix).as_str(),
+            indent,
+        ));
+    }
+    lines
+}
+
+fn render_old_code_block_comment(
+    old_lines: &[String],
+    config: &AnnotateOldCodeBlockCommentConfig,
+    indent: &str,
+) -> Vec<String> {
+    if old_lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::with_capacity(old_lines.len() + 2);
+    if config.title.trim().is_empty() {
+        lines.push(format!("{indent}/*"));
+    } else {
+        lines.push(format!("{indent}/* {}", config.title));
+    }
+    for old_line in old_lines {
+        if old_line.is_empty() {
+            lines.push(format!("{indent} * {}", config.body_prefix));
+        } else {
+            lines.push(format!("{indent} * {}{}", config.body_prefix, old_line));
+        }
+    }
+    lines.push(format!("{indent} */"));
+    lines
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -711,10 +798,13 @@ fn expand_policy_template(
     context: &RuntimeContext,
     kind: &str,
     path: &str,
+    old_value_override: Option<&str>,
     old_lines: &[String],
     new_lines: &[String],
 ) -> String {
-    let old = old_lines.join("\\n");
+    let old = old_value_override
+        .map(std::string::ToString::to_string)
+        .unwrap_or_else(|| old_lines.join("\\n"));
     let new = new_lines.join("\\n");
     let mut rendered = template.to_string();
     for (key, value) in [
@@ -793,7 +883,8 @@ mod tests {
         collect_staged_changes, git_stdout, matches_pattern, parse_hunk_segments,
         parse_name_status_output, run, ChangeKind, HunkSegment, RuntimeContext,
     };
-    use crate::config::{merge_layers, AppConfig};
+    use crate::config::{merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig};
+    use chrono::NaiveDateTime;
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
@@ -1033,6 +1124,186 @@ end = "//@}"
             .nth(1)
             .expect("comment line after leading blank")
             .starts_with("//"));
+    }
+
+    #[test]
+    fn date_format_default_pattern_outputs_expected_date_text() {
+        let date = NaiveDateTime::parse_from_str("2026-04-01 09:08:07", "%Y-%m-%d %H:%M:%S")
+            .expect("test datetime");
+        assert_eq!(super::format_date_tag("yyyy-mm-dd", date), "2026-04-01");
+    }
+
+    #[test]
+    fn date_format_custom_pattern_outputs_expected_date_text() {
+        let date = NaiveDateTime::parse_from_str("2026-04-01 09:08:07", "%Y-%m-%d %H:%M:%S")
+            .expect("test datetime");
+        assert_eq!(
+            super::format_date_tag("dd/mm/yyyy HH:MM", date),
+            "01/04/2026 09:08"
+        );
+    }
+
+    #[test]
+    fn explicit_old_code_none_suppresses_old_content_rendering() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
+
+        let content = "int a = 2;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Modify,
+                old_lines: vec!["int a = 1;".to_string()],
+                new_lines: vec!["int a = 2;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "2026-04-01".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(!updated.contains("int a = 1;"));
+        assert!(!updated.contains("// old:"));
+    }
+
+    #[test]
+    fn explicit_old_code_line_comment_per_line_renders_each_old_line() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::LineComment);
+        cfg.annotate.old_code.line_comment.layout = AnnotateOldCodeLineLayout::PerLine;
+        cfg.annotate.old_code.line_comment.body_prefix = "old: ".to_string();
+        cfg.annotate.old_code.line_comment.body_suffix = "".to_string();
+        cfg.annotate.block_templates.modify.start = "// modify".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+
+        let content = "int a = 2;\nint b = 3;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Modify,
+                old_lines: vec!["int a = 1;".to_string(), "int b = 2;".to_string()],
+                new_lines: vec!["int a = 2;".to_string(), "int b = 3;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "2026-04-01".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("// old: int a = 1;"));
+        assert!(updated.contains("// old: int b = 2;"));
+    }
+
+    #[test]
+    fn explicit_old_code_line_comment_header_body_renders_header_and_body() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::LineComment);
+        cfg.annotate.old_code.line_comment.layout = AnnotateOldCodeLineLayout::HeaderBody;
+        cfg.annotate.old_code.line_comment.header = "legacy old".to_string();
+        cfg.annotate.old_code.line_comment.body_prefix = ">> ".to_string();
+        cfg.annotate.old_code.line_comment.body_suffix = String::new();
+        cfg.annotate.block_templates.modify.start = "// modify".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+
+        let content = "int a = 2;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Modify,
+                old_lines: vec!["int a = 1;".to_string()],
+                new_lines: vec!["int a = 2;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "2026-04-01".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("// legacy old"));
+        assert!(updated.contains("// >> int a = 1;"));
+    }
+
+    #[test]
+    fn explicit_old_code_block_comment_renders_block() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::BlockComment);
+        cfg.annotate.old_code.block_comment.title = "cover old codes".to_string();
+        cfg.annotate.old_code.block_comment.body_prefix = "| ".to_string();
+        cfg.annotate.block_templates.modify.start = "// modify".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+
+        let content = "int a = 2;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Modify,
+                old_lines: vec!["int a = 1;".to_string()],
+                new_lines: vec!["int a = 2;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "2026-04-01".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("/* cover old codes"));
+        assert!(updated.contains(" * | int a = 1;"));
+        assert!(updated.contains(" */"));
+    }
+
+    #[test]
+    fn legacy_old_code_fallback_kept_when_mode_is_unset() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = None;
+        cfg.annotate.block_templates.modify.start = "// modify".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+
+        let content = "int a = 2;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Modify,
+                old_lines: vec!["int a = 1;".to_string()],
+                new_lines: vec!["int a = 2;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "2026-04-01".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("// old:"));
+        assert!(updated.contains("//   int a = 1;"));
     }
 
     #[test]

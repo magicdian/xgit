@@ -53,7 +53,9 @@ pub struct AnnotateConfig {
     pub staged: StagedConfig,
     pub form: AnnotateFormConfig,
     pub reference_kinds: Vec<String>,
+    pub date: AnnotateDateConfig,
     pub render: AnnotateRenderConfig,
+    pub old_code: AnnotateOldCodeConfig,
     pub block_templates: BlockTemplates,
     pub file_rules: Vec<FileRuleConfig>,
 }
@@ -75,6 +77,51 @@ pub struct AnnotateFormConfig {
 pub struct AnnotateRenderConfig {
     pub align_with_code_indent: bool,
     pub wrap_blank_lines: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AnnotateDateConfig {
+    pub format: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AnnotateOldCodeConfig {
+    pub mode: Option<AnnotateOldCodeMode>,
+    pub line_comment: AnnotateOldCodeLineCommentConfig,
+    pub block_comment: AnnotateOldCodeBlockCommentConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnotateOldCodeMode {
+    None,
+    LineComment,
+    BlockComment,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AnnotateOldCodeLineCommentConfig {
+    pub layout: AnnotateOldCodeLineLayout,
+    pub header: String,
+    pub body_prefix: String,
+    pub body_suffix: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnotateOldCodeLineLayout {
+    PerLine,
+    HeaderBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AnnotateOldCodeBlockCommentConfig {
+    pub title: String,
+    pub body_prefix: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,7 +189,9 @@ impl Default for AnnotateConfig {
             staged: StagedConfig::default(),
             form: AnnotateFormConfig::default(),
             reference_kinds: vec!["bug".to_string(), "req".to_string()],
+            date: AnnotateDateConfig::default(),
             render: AnnotateRenderConfig::default(),
+            old_code: AnnotateOldCodeConfig::default(),
             block_templates: BlockTemplates::default(),
             file_rules: vec![
                 FileRuleConfig {
@@ -191,6 +240,50 @@ impl Default for AnnotateRenderConfig {
         Self {
             align_with_code_indent: false,
             wrap_blank_lines: true,
+        }
+    }
+}
+
+impl Default for AnnotateDateConfig {
+    fn default() -> Self {
+        Self {
+            format: "yyyy-mm-dd".to_string(),
+        }
+    }
+}
+
+impl Default for AnnotateOldCodeConfig {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            line_comment: AnnotateOldCodeLineCommentConfig::default(),
+            block_comment: AnnotateOldCodeBlockCommentConfig::default(),
+        }
+    }
+}
+
+impl Default for AnnotateOldCodeLineCommentConfig {
+    fn default() -> Self {
+        Self {
+            layout: AnnotateOldCodeLineLayout::PerLine,
+            header: "old:".to_string(),
+            body_prefix: "old: ".to_string(),
+            body_suffix: String::new(),
+        }
+    }
+}
+
+impl Default for AnnotateOldCodeLineLayout {
+    fn default() -> Self {
+        Self::PerLine
+    }
+}
+
+impl Default for AnnotateOldCodeBlockCommentConfig {
+    fn default() -> Self {
+        Self {
+            title: "cover old codes".to_string(),
+            body_prefix: String::new(),
         }
     }
 }
@@ -264,7 +357,9 @@ struct PartialAnnotateConfig {
     staged: Option<PartialStagedConfig>,
     form: Option<PartialAnnotateFormConfig>,
     reference_kinds: Option<Vec<String>>,
+    date: Option<PartialAnnotateDateConfig>,
     render: Option<PartialAnnotateRenderConfig>,
+    old_code: Option<PartialAnnotateOldCodeConfig>,
     block_templates: Option<PartialBlockTemplates>,
     policies: Option<PartialPolicyTemplates>,
     file_rules: Option<Vec<FileRuleConfig>>,
@@ -287,6 +382,36 @@ struct PartialAnnotateFormConfig {
 struct PartialAnnotateRenderConfig {
     align_with_code_indent: Option<bool>,
     wrap_blank_lines: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct PartialAnnotateDateConfig {
+    format: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct PartialAnnotateOldCodeConfig {
+    mode: Option<AnnotateOldCodeMode>,
+    line_comment: Option<PartialAnnotateOldCodeLineCommentConfig>,
+    block_comment: Option<PartialAnnotateOldCodeBlockCommentConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct PartialAnnotateOldCodeLineCommentConfig {
+    layout: Option<AnnotateOldCodeLineLayout>,
+    header: Option<String>,
+    body_prefix: Option<String>,
+    body_suffix: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct PartialAnnotateOldCodeBlockCommentConfig {
+    title: Option<String>,
+    body_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -352,12 +477,44 @@ impl AppConfig {
             if let Some(reference_kinds) = annotate.reference_kinds {
                 self.annotate.reference_kinds = reference_kinds;
             }
+            if let Some(date) = annotate.date {
+                if let Some(format) = date.format {
+                    self.annotate.date.format = format;
+                }
+            }
             if let Some(render) = annotate.render {
                 if let Some(align_with_code_indent) = render.align_with_code_indent {
                     self.annotate.render.align_with_code_indent = align_with_code_indent;
                 }
                 if let Some(wrap_blank_lines) = render.wrap_blank_lines {
                     self.annotate.render.wrap_blank_lines = wrap_blank_lines;
+                }
+            }
+            if let Some(old_code) = annotate.old_code {
+                if let Some(mode) = old_code.mode {
+                    self.annotate.old_code.mode = Some(mode);
+                }
+                if let Some(line_comment) = old_code.line_comment {
+                    if let Some(layout) = line_comment.layout {
+                        self.annotate.old_code.line_comment.layout = layout;
+                    }
+                    if let Some(header) = line_comment.header {
+                        self.annotate.old_code.line_comment.header = header;
+                    }
+                    if let Some(body_prefix) = line_comment.body_prefix {
+                        self.annotate.old_code.line_comment.body_prefix = body_prefix;
+                    }
+                    if let Some(body_suffix) = line_comment.body_suffix {
+                        self.annotate.old_code.line_comment.body_suffix = body_suffix;
+                    }
+                }
+                if let Some(block_comment) = old_code.block_comment {
+                    if let Some(title) = block_comment.title {
+                        self.annotate.old_code.block_comment.title = title;
+                    }
+                    if let Some(body_prefix) = block_comment.body_prefix {
+                        self.annotate.old_code.block_comment.body_prefix = body_prefix;
+                    }
                 }
             }
             let mut has_new_add_template = false;
@@ -582,7 +739,9 @@ fn parse_env_partial(env_map: &HashMap<String, String>) -> Result<PartialAppConf
             }),
             form: None,
             reference_kinds: None,
+            date: None,
             render: None,
+            old_code: None,
             block_templates: None,
             policies: None,
             file_rules: None,
@@ -623,7 +782,10 @@ fn legacy_policy_to_start_template(policy: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_layers, project_config_path, resolve_git_root};
+    use super::{
+        merge_layers, project_config_path, resolve_git_root, AnnotateOldCodeLineLayout,
+        AnnotateOldCodeMode,
+    };
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -691,6 +853,51 @@ wrap_blank_lines = false
         let cfg = merge_layers(Some(global), None, &env, "zh-CN").unwrap();
         assert!(cfg.annotate.render.align_with_code_indent);
         assert!(!cfg.annotate.render.wrap_blank_lines);
+    }
+
+    #[test]
+    fn default_date_and_old_code_are_initialized() {
+        let env = HashMap::new();
+        let cfg = merge_layers(None, None, &env, "zh-CN").unwrap();
+        assert_eq!(cfg.annotate.date.format, "yyyy-mm-dd");
+        assert_eq!(cfg.annotate.old_code.mode, None);
+        assert_eq!(
+            cfg.annotate.old_code.line_comment.layout,
+            AnnotateOldCodeLineLayout::PerLine
+        );
+        assert_eq!(cfg.annotate.old_code.line_comment.body_prefix, "old: ");
+        assert_eq!(cfg.annotate.old_code.block_comment.title, "cover old codes");
+    }
+
+    #[test]
+    fn date_and_old_code_can_be_overridden_by_layers() {
+        let project = r#"
+[annotate.date]
+format = "yyyy/mm/dd"
+
+[annotate.old_code]
+mode = "line_comment"
+
+[annotate.old_code.line_comment]
+layout = "header_body"
+header = "legacy old"
+body_prefix = "old=>"
+body_suffix = ";"
+"#;
+        let env = HashMap::new();
+        let cfg = merge_layers(None, Some(project), &env, "zh-CN").unwrap();
+        assert_eq!(cfg.annotate.date.format, "yyyy/mm/dd");
+        assert_eq!(
+            cfg.annotate.old_code.mode,
+            Some(AnnotateOldCodeMode::LineComment)
+        );
+        assert_eq!(
+            cfg.annotate.old_code.line_comment.layout,
+            AnnotateOldCodeLineLayout::HeaderBody
+        );
+        assert_eq!(cfg.annotate.old_code.line_comment.header, "legacy old");
+        assert_eq!(cfg.annotate.old_code.line_comment.body_prefix, "old=>");
+        assert_eq!(cfg.annotate.old_code.line_comment.body_suffix, ";");
     }
 
     #[test]

@@ -14,9 +14,22 @@ fields = ["reason", "reference_kind", "reference_value"]
 [annotate]
 reference_kinds = ["bug", "req"]
 
+[annotate.date]
+format = "yyyy-mm-dd"
+
 [annotate.render]
 align_with_code_indent = false
 wrap_blank_lines = true
+
+[annotate.old_code.line_comment]
+layout = "per_line"
+header = "old:"
+body_prefix = "old: "
+body_suffix = ""
+
+[annotate.old_code.block_comment]
+title = "cover old codes"
+body_prefix = ""
 
 [annotate.block_templates.add]
 start = "// {author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
