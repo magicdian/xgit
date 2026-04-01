@@ -21,6 +21,7 @@ xgit — 可配置的 Git 开发辅助工具
 - 关键操作：
   - 主页面：`Up/Down` 选择栏目，`Enter` 进入
   - 子页面：`Up/Down` 切换字段，`Enter` 或 `Left/Right` 切换布尔值
+  - `代码文件类型`：`Enter` 打开层级选择器；分类层 `Space` 整类切换，子项层 `Space` 单项切换，`Enter/Esc` 返回
   - 子页面：`ESC` 返回主页面
   - 主页面：`ESC` 退出（有未保存修改时会弹出保存确认）
   - `e` 编辑文本字段
@@ -51,7 +52,11 @@ xgit annotate --latest-commit --reason "refactor" --reference-kind req --referen
   - 非根提交
   - 非 merge commit
   - 工作区干净
-- 渲染器按文件规则分发；当前完整实现 `c_line_block`（`.c/.h/.cpp/.java`）
+- setup 中代码文件类型默认启用 `C/C++` 与 `Java`，并可按分类启用 `JavaScript`、`Rust`、`Kotlin`
+- 渲染器按文件规则分发；当前完整实现 `c_line_block`（上述内置类型均可映射到该渲染器）
+- 注释渲染可通过配置项控制：
+  - `annotate.render.align_with_code_indent`：注释是否对齐代码缩进（默认 `false`）
+  - `annotate.render.wrap_blank_lines`：注释块是否包裹变更中的空白行（默认 `true`）
 
 ## 跨平台支持
 - 目标平台：macOS、Linux、Windows

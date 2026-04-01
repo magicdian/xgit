@@ -1,3 +1,7 @@
+use crate::code_file_types::{
+    categories, category_selected_count, category_state, file_rules_from_selection,
+    selection_from_file_rules, set_category_selected, total_builtin_entry_count, TriState,
+};
 use crate::config::{save_config, AppConfig, FileRuleConfig};
 use crate::i18n::Catalog;
 use anyhow::Result;
@@ -12,6 +16,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Terminal;
+use std::collections::BTreeSet;
 use std::io::{stdout, IsTerminal};
 use std::path::Path;
 use std::time::Duration;
@@ -78,6 +83,21 @@ impl Default for Focus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodeFileTypePickerLevel {
+    Categories,
+    Entries,
+}
+
+#[derive(Debug, Clone)]
+struct CodeFileTypePickerState {
+    level: CodeFileTypePickerLevel,
+    category_index: usize,
+    entry_index: usize,
+    selected_keys: BTreeSet<String>,
+    passthrough_rules: Vec<FileRuleConfig>,
+}
+
 #[derive(Debug, Default)]
 struct SetupState {
     section: usize,
@@ -89,6 +109,7 @@ struct SetupState {
     dirty: bool,
     confirm_exit: bool,
     confirm_choice: usize,
+    code_file_type_picker: Option<CodeFileTypePickerState>,
 }
 
 fn handle_key_code(
@@ -119,6 +140,10 @@ fn handle_key_code(
             _ => {}
         }
         return Ok(false);
+    }
+
+    if state.code_file_type_picker.is_some() {
+        return handle_code_file_type_picker_key(code, catalog, working, state);
     }
 
     if state.confirm_exit {
@@ -178,12 +203,15 @@ fn handle_key_code(
                 }
                 state.status = catalog.t("setup.status.enter_section");
             } else {
-                handle_toggle_or_edit(catalog, working, state);
+                handle_enter_on_field(catalog, working, state);
             }
         }
         KeyCode::Left | KeyCode::Right => {
             if state.focus == Focus::Fields {
-                handle_toggle_or_edit(catalog, working, state);
+                if toggle_field(working, state.section, state.field) {
+                    state.dirty = true;
+                    state.status = catalog.t("setup.status.field_updated");
+                }
             }
         }
         KeyCode::Char('e') => {
@@ -263,12 +291,134 @@ fn handle_exit_confirm(
     Ok(false)
 }
 
-fn handle_toggle_or_edit(catalog: &Catalog, working: &mut AppConfig, state: &mut SetupState) {
+fn handle_enter_on_field(catalog: &Catalog, working: &mut AppConfig, state: &mut SetupState) {
+    if (state.section, state.field) == (4, 3) {
+        open_code_file_type_picker(working, state);
+        state.status = catalog.t("setup.status.code_file_types_opened");
+        return;
+    }
+
     if toggle_field(working, state.section, state.field) {
         state.dirty = true;
         state.status = catalog.t("setup.status.field_updated");
     } else {
         begin_edit_if_text(catalog, working, state);
+    }
+}
+
+fn open_code_file_type_picker(config: &AppConfig, state: &mut SetupState) {
+    let selection = selection_from_file_rules(&config.annotate.file_rules);
+    state.code_file_type_picker = Some(CodeFileTypePickerState {
+        level: CodeFileTypePickerLevel::Categories,
+        category_index: 0,
+        entry_index: 0,
+        selected_keys: selection.selected_keys,
+        passthrough_rules: selection.passthrough_rules,
+    });
+}
+
+fn handle_code_file_type_picker_key(
+    code: KeyCode,
+    catalog: &Catalog,
+    working: &mut AppConfig,
+    state: &mut SetupState,
+) -> Result<bool> {
+    let catalog_entries = categories();
+    if catalog_entries.is_empty() {
+        state.code_file_type_picker = None;
+        state.status = catalog.t("setup.status.code_file_types_unavailable");
+        return Ok(false);
+    }
+
+    let Some(picker) = state.code_file_type_picker.as_mut() else {
+        return Ok(false);
+    };
+
+    match code {
+        KeyCode::Up => match picker.level {
+            CodeFileTypePickerLevel::Categories => {
+                picker.category_index = if picker.category_index == 0 {
+                    catalog_entries.len() - 1
+                } else {
+                    picker.category_index - 1
+                };
+            }
+            CodeFileTypePickerLevel::Entries => {
+                let entries = catalog_entries[picker.category_index].entries;
+                if !entries.is_empty() {
+                    picker.entry_index = if picker.entry_index == 0 {
+                        entries.len() - 1
+                    } else {
+                        picker.entry_index - 1
+                    };
+                }
+            }
+        },
+        KeyCode::Down => match picker.level {
+            CodeFileTypePickerLevel::Categories => {
+                picker.category_index = (picker.category_index + 1) % catalog_entries.len();
+            }
+            CodeFileTypePickerLevel::Entries => {
+                let entries = catalog_entries[picker.category_index].entries;
+                if !entries.is_empty() {
+                    picker.entry_index = (picker.entry_index + 1) % entries.len();
+                }
+            }
+        },
+        KeyCode::Enter => match picker.level {
+            CodeFileTypePickerLevel::Categories => {
+                picker.level = CodeFileTypePickerLevel::Entries;
+                picker.entry_index = 0;
+            }
+            CodeFileTypePickerLevel::Entries => {
+                picker.level = CodeFileTypePickerLevel::Categories;
+            }
+        },
+        KeyCode::Char(' ') => match picker.level {
+            CodeFileTypePickerLevel::Categories => {
+                let category = &catalog_entries[picker.category_index];
+                let next_selected = !matches!(
+                    category_state(category, &picker.selected_keys),
+                    TriState::All
+                );
+                set_category_selected(category, &mut picker.selected_keys, next_selected);
+            }
+            CodeFileTypePickerLevel::Entries => {
+                let category = &catalog_entries[picker.category_index];
+                if let Some(entry) = category.entries.get(picker.entry_index) {
+                    if picker.selected_keys.contains(entry.key) {
+                        picker.selected_keys.remove(entry.key);
+                    } else {
+                        picker.selected_keys.insert(entry.key.to_string());
+                    }
+                }
+            }
+        },
+        KeyCode::Esc => match picker.level {
+            CodeFileTypePickerLevel::Entries => {
+                picker.level = CodeFileTypePickerLevel::Categories;
+            }
+            CodeFileTypePickerLevel::Categories => {
+                close_code_file_type_picker(catalog, working, state);
+            }
+        },
+        _ => {}
+    }
+
+    Ok(false)
+}
+
+fn close_code_file_type_picker(catalog: &Catalog, working: &mut AppConfig, state: &mut SetupState) {
+    let Some(picker) = state.code_file_type_picker.take() else {
+        return;
+    };
+    let next_rules = file_rules_from_selection(&picker.selected_keys, &picker.passthrough_rules);
+    if next_rules != working.annotate.file_rules {
+        working.annotate.file_rules = next_rules;
+        state.dirty = true;
+        state.status = catalog.t("setup.status.code_file_types_updated");
+    } else {
+        state.status = catalog.t("setup.status.code_file_types_unchanged");
     }
 }
 
@@ -329,12 +479,16 @@ fn draw(
             "setup.help.target",
             &[("path", target.display().to_string())],
         )),
-        Line::from(if state.focus == Focus::Menu {
+        Line::from(if state.code_file_type_picker.is_some() {
+            catalog.t("setup.help.code_file_types_nav")
+        } else if state.focus == Focus::Menu {
             catalog.t("setup.help.menu_nav")
         } else {
             catalog.t("setup.help.field_nav")
         }),
-        Line::from(if state.focus == Focus::Menu {
+        Line::from(if state.code_file_type_picker.is_some() {
+            catalog.t("setup.help.code_file_types_actions")
+        } else if state.focus == Focus::Menu {
             catalog.t("setup.help.menu_actions")
         } else {
             catalog.t("setup.help.field_actions")
@@ -399,6 +553,8 @@ fn draw(
 
     if state.confirm_exit {
         draw_exit_confirm(frame, catalog, state);
+    } else if let Some(picker) = &state.code_file_type_picker {
+        draw_code_file_type_picker(frame, catalog, picker);
     }
 }
 
@@ -457,13 +613,115 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+fn draw_code_file_type_picker(
+    frame: &mut ratatui::Frame,
+    catalog: &Catalog,
+    picker: &CodeFileTypePickerState,
+) {
+    let area = centered_rect(70, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let catalog_entries = categories();
+    if catalog_entries.is_empty() {
+        return;
+    }
+
+    let title = match picker.level {
+        CodeFileTypePickerLevel::Categories => catalog.t("setup.block.code_file_types"),
+        CodeFileTypePickerLevel::Entries => {
+            let category = &catalog_entries[picker.category_index];
+            let category_label =
+                localized_label(catalog, category.label_key, category.default_label);
+            catalog.tf(
+                "setup.block.code_file_types_entries",
+                &[("category", category_label)],
+            )
+        }
+    };
+
+    let items = match picker.level {
+        CodeFileTypePickerLevel::Categories => catalog_entries
+            .iter()
+            .map(|category| {
+                let label = localized_label(catalog, category.label_key, category.default_label);
+                let selected = category_selected_count(category, &picker.selected_keys);
+                let marker = tri_state_marker(category_state(category, &picker.selected_keys));
+                ListItem::new(Line::from(format!(
+                    "{marker} {label} ({selected}/{})",
+                    category.entries.len()
+                )))
+            })
+            .collect::<Vec<_>>(),
+        CodeFileTypePickerLevel::Entries => {
+            let category = &catalog_entries[picker.category_index];
+            category
+                .entries
+                .iter()
+                .map(|entry| {
+                    let label = localized_label(catalog, entry.label_key, entry.default_label);
+                    let marker = if picker.selected_keys.contains(entry.key) {
+                        "[x]"
+                    } else {
+                        "[ ]"
+                    };
+                    ListItem::new(Line::from(format!("{marker} {label} ({})", entry.pattern)))
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(match picker.level {
+        CodeFileTypePickerLevel::Categories => picker.category_index,
+        CodeFileTypePickerLevel::Entries => picker.entry_index,
+    }));
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(1)])
+        .split(area);
+
+    let list = List::new(items)
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    frame.render_stateful_widget(list, popup_layout[0], &mut list_state);
+
+    let hint = match picker.level {
+        CodeFileTypePickerLevel::Categories => catalog.t("setup.code_file_type.hint.categories"),
+        CodeFileTypePickerLevel::Entries => catalog.t("setup.code_file_type.hint.entries"),
+    };
+    frame.render_widget(Paragraph::new(hint), popup_layout[1]);
+}
+
+fn tri_state_marker(state: TriState) -> &'static str {
+    match state {
+        TriState::All => "[x]",
+        TriState::Partial => "[-]",
+        TriState::None => "[ ]",
+    }
+}
+
+fn localized_label(catalog: &Catalog, key: &str, fallback: &str) -> String {
+    let value = catalog.t(key);
+    if value == key {
+        fallback.to_string()
+    } else {
+        value
+    }
+}
+
 fn field_count(section: usize, _config: &AppConfig) -> usize {
     match section {
         0 => 1,
         1 => 2,
         2 => 1,
         3 => 3,
-        4 => 7,
+        4 => 9,
         _ => 0,
     }
 }
@@ -527,8 +785,18 @@ fn field_lines(catalog: &Catalog, config: &AppConfig, section: usize) -> Vec<Str
             ),
             format!(
                 "{}: {}",
-                catalog.t("setup.field.annotate.file_rules"),
-                file_rules_to_text(&config.annotate.file_rules)
+                catalog.t("setup.field.annotate.code_file_types"),
+                code_file_type_summary(catalog, &config.annotate.file_rules)
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.align_with_code_indent"),
+                bool_text(catalog, config.annotate.render.align_with_code_indent)
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.wrap_blank_lines"),
+                bool_text(catalog, config.annotate.render.wrap_blank_lines)
             ),
             format!(
                 "{}: {}",
@@ -548,6 +816,31 @@ fn field_lines(catalog: &Catalog, config: &AppConfig, section: usize) -> Vec<Str
         ],
         _ => vec![],
     }
+}
+
+fn code_file_type_summary(catalog: &Catalog, file_rules: &[FileRuleConfig]) -> String {
+    let selection = selection_from_file_rules(file_rules);
+    let selected = selection.selected_keys.len();
+    let total = total_builtin_entry_count();
+    let mut summary = catalog.tf(
+        "setup.value.code_file_types_summary",
+        &[
+            ("selected", selected.to_string()),
+            ("total", total.to_string()),
+        ],
+    );
+
+    if !selection.passthrough_rules.is_empty() {
+        summary = catalog.tf(
+            "setup.value.code_file_types_summary_with_custom",
+            &[
+                ("summary", summary),
+                ("count", selection.passthrough_rules.len().to_string()),
+            ],
+        );
+    }
+
+    summary
 }
 
 fn bool_text(catalog: &Catalog, value: bool) -> String {
@@ -588,6 +881,15 @@ fn toggle_field(config: &mut AppConfig, section: usize, field: usize) -> bool {
             config.annotate.staged.include_untracked = !config.annotate.staged.include_untracked;
             true
         }
+        (4, 4) => {
+            config.annotate.render.align_with_code_indent =
+                !config.annotate.render.align_with_code_indent;
+            true
+        }
+        (4, 5) => {
+            config.annotate.render.wrap_blank_lines = !config.annotate.render.wrap_blank_lines;
+            true
+        }
         _ => false,
     }
 }
@@ -600,10 +902,9 @@ fn get_text(config: &AppConfig, section: usize, field: usize) -> Option<String> 
         (3, 2) => Some(config.identity.email.clone().unwrap_or_default()),
         (4, 1) => Some(config.annotate.form.fields.join(",")),
         (4, 2) => Some(config.annotate.reference_kinds.join(",")),
-        (4, 3) => Some(file_rules_to_text(&config.annotate.file_rules)),
-        (4, 4) => Some(config.annotate.policies.add.clone()),
-        (4, 5) => Some(config.annotate.policies.modify.clone()),
-        (4, 6) => Some(config.annotate.policies.del.clone()),
+        (4, 6) => Some(config.annotate.policies.add.clone()),
+        (4, 7) => Some(config.annotate.policies.modify.clone()),
+        (4, 8) => Some(config.annotate.policies.del.clone()),
         _ => None,
     }
 }
@@ -620,12 +921,9 @@ fn apply_text(config: &mut AppConfig, section: usize, field: usize, value: Strin
         (4, 2) => {
             config.annotate.reference_kinds = split_csv(value);
         }
-        (4, 3) => {
-            config.annotate.file_rules = parse_file_rules(&value);
-        }
-        (4, 4) => config.annotate.policies.add = value,
-        (4, 5) => config.annotate.policies.modify = value,
-        (4, 6) => config.annotate.policies.del = value,
+        (4, 6) => config.annotate.policies.add = value,
+        (4, 7) => config.annotate.policies.modify = value,
+        (4, 8) => config.annotate.policies.del = value,
         _ => {}
     }
 }
@@ -647,27 +945,6 @@ fn split_csv(value: String) -> Vec<String> {
         .collect()
 }
 
-fn file_rules_to_text(rules: &[FileRuleConfig]) -> String {
-    rules
-        .iter()
-        .map(|rule| format!("{}={}", rule.pattern, rule.renderer))
-        .collect::<Vec<String>>()
-        .join(";")
-}
-
-fn parse_file_rules(value: &str) -> Vec<FileRuleConfig> {
-    let mut out = Vec::new();
-    for item in value.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some((pattern, renderer)) = item.split_once('=') {
-            out.push(FileRuleConfig {
-                pattern: pattern.trim().to_string(),
-                renderer: renderer.trim().to_string(),
-            });
-        }
-    }
-    out
-}
-
 struct TerminalGuard;
 
 impl Drop for TerminalGuard {
@@ -680,7 +957,8 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::{handle_key_code, Focus, SetupState};
-    use crate::config::AppConfig;
+    use crate::code_file_types::{categories, category_state, TriState};
+    use crate::config::{AppConfig, FileRuleConfig};
     use crate::i18n;
     use crossterm::event::KeyCode;
     use std::path::Path;
@@ -849,5 +1127,93 @@ mod tests {
         .unwrap();
         assert!(exit);
         assert!(!target_path.exists());
+    }
+
+    #[test]
+    fn code_file_type_picker_supports_hierarchy_partial_and_save_mapping() {
+        let catalog = test_catalog();
+        let target = Path::new("/tmp/xgit-setup-test.toml");
+        let mut config = AppConfig::default();
+        config.annotate.file_rules.push(FileRuleConfig {
+            pattern: "*.proto".to_string(),
+            renderer: "proto_line_block".to_string(),
+        });
+        let mut state = SetupState::default();
+
+        for _ in 0..4 {
+            handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
+        }
+        handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
+        for _ in 0..3 {
+            handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
+        }
+
+        handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
+        let picker = state.code_file_type_picker.as_ref().unwrap();
+        assert!(picker.selected_keys.contains("c_cpp/c"));
+        assert!(picker.selected_keys.contains("java/java"));
+
+        handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char(' '),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
+        handle_key_code(KeyCode::Esc, &catalog, target, &mut config, &mut state).unwrap();
+
+        let picker = state.code_file_type_picker.as_ref().unwrap();
+        assert_eq!(
+            category_state(&categories()[0], &picker.selected_keys),
+            TriState::Partial
+        );
+
+        handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char(' '),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
+        handle_key_code(KeyCode::Esc, &catalog, target, &mut config, &mut state).unwrap();
+
+        assert!(state.code_file_type_picker.is_none());
+        assert!(state.dirty);
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.c" && rule.renderer == "c_line_block"));
+        assert!(!config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.h" && rule.renderer == "c_line_block"));
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.cpp" && rule.renderer == "c_line_block"));
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.java" && rule.renderer == "c_line_block"));
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.js" && rule.renderer == "c_line_block"));
+        assert!(config
+            .annotate
+            .file_rules
+            .iter()
+            .any(|rule| rule.pattern == "*.proto" && rule.renderer == "proto_line_block"));
     }
 }

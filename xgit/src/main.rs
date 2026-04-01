@@ -1,4 +1,5 @@
 mod annotate;
+mod code_file_types;
 mod config;
 mod gitutils;
 mod i18n;

@@ -535,14 +535,20 @@ fn apply_c_line_segments(
         .collect::<Vec<_>>();
 
     for segment in segments.iter().rev() {
-        let (prefix, suffix) = render_c_line_block(segment, context, config, path);
-        let index = segment.start_line.saturating_sub(1).min(lines.len());
-        lines.splice(index..index, prefix.clone());
+        let Some(window) = segment_render_window(segment, config) else {
+            continue;
+        };
+
+        let (prefix, suffix) =
+            render_c_line_block(segment, context, config, path, window.code_lines_range);
+        let base_index = segment.start_line.saturating_sub(1).min(lines.len());
+        let insert_index = (base_index + window.insert_offset).min(lines.len());
+        lines.splice(insert_index..insert_index, prefix.clone());
 
         let suffix_index = if segment.kind == ChangeKind::Delete {
-            index + prefix.len()
+            insert_index + prefix.len()
         } else {
-            (index + prefix.len() + segment.new_lines.len()).min(lines.len())
+            (insert_index + prefix.len() + window.covered_line_count).min(lines.len())
         };
         lines.splice(suffix_index..suffix_index, suffix.clone());
     }
@@ -563,6 +569,7 @@ fn render_c_line_block(
     context: &RuntimeContext,
     config: &AppConfig,
     path: &str,
+    code_lines_range: Option<(usize, usize)>,
 ) -> (Vec<String>, Vec<String>) {
     let template = match segment.kind {
         ChangeKind::Add => &config.annotate.policies.add,
@@ -578,27 +585,108 @@ fn render_c_line_block(
         &segment.new_lines,
     );
 
-    let mut prefix = rendered.lines().map(c_line_comment).collect::<Vec<_>>();
+    let comment_indent = resolve_comment_indent(segment, config, code_lines_range);
+    let mut prefix = rendered
+        .lines()
+        .map(|line| c_line_comment(line, comment_indent.as_str()))
+        .collect::<Vec<_>>();
     if (segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete)
         && !segment.old_lines.is_empty()
         && !template.contains("{old}")
     {
-        prefix.push(c_line_comment("old:"));
+        prefix.push(c_line_comment("old:", comment_indent.as_str()));
         for old in &segment.old_lines {
-            prefix.push(c_line_comment(&format!("  {old}")));
+            prefix.push(c_line_comment(&format!("  {old}"), comment_indent.as_str()));
         }
     }
 
-    let suffix = vec![c_line_comment(&format!("end {}", segment.kind.key()))];
+    let suffix = vec![c_line_comment(
+        &format!("end {}", segment.kind.key()),
+        comment_indent.as_str(),
+    )];
     (prefix, suffix)
 }
 
-fn c_line_comment(content: &str) -> String {
+fn c_line_comment(content: &str, indent: &str) -> String {
     if content.trim().is_empty() {
-        "//".to_string()
+        format!("{indent}//")
     } else {
-        format!("// {content}")
+        format!("{indent}// {content}")
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SegmentRenderWindow {
+    insert_offset: usize,
+    covered_line_count: usize,
+    code_lines_range: Option<(usize, usize)>,
+}
+
+fn segment_render_window(segment: &HunkSegment, config: &AppConfig) -> Option<SegmentRenderWindow> {
+    if segment.kind == ChangeKind::Delete {
+        return Some(SegmentRenderWindow {
+            insert_offset: 0,
+            covered_line_count: 0,
+            code_lines_range: None,
+        });
+    }
+
+    if config.annotate.render.wrap_blank_lines {
+        return Some(SegmentRenderWindow {
+            insert_offset: 0,
+            covered_line_count: segment.new_lines.len(),
+            code_lines_range: Some((0, segment.new_lines.len())),
+        });
+    }
+
+    let first = segment
+        .new_lines
+        .iter()
+        .position(|line| !line.trim().is_empty())?;
+    let last = segment
+        .new_lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())?;
+    let len = last - first + 1;
+    Some(SegmentRenderWindow {
+        insert_offset: first,
+        covered_line_count: len,
+        code_lines_range: Some((first, len)),
+    })
+}
+
+fn resolve_comment_indent(
+    segment: &HunkSegment,
+    config: &AppConfig,
+    code_lines_range: Option<(usize, usize)>,
+) -> String {
+    if !config.annotate.render.align_with_code_indent {
+        return String::new();
+    }
+
+    let candidate_lines: &[String] =
+        if segment.kind == ChangeKind::Delete || segment.new_lines.is_empty() {
+            &segment.old_lines
+        } else if let Some((start, len)) = code_lines_range {
+            &segment.new_lines[start..start + len]
+        } else {
+            &segment.new_lines
+        };
+
+    candidate_lines
+        .iter()
+        .find_map(|line| {
+            if line.trim().is_empty() {
+                None
+            } else {
+                Some(
+                    line.chars()
+                        .take_while(|ch| ch.is_whitespace())
+                        .collect::<String>(),
+                )
+            }
+        })
+        .unwrap_or_default()
 }
 
 fn expand_policy_template(
@@ -760,6 +848,77 @@ index a1b2c3d..e4f5a6b 100644
         );
         assert!(updated.contains("// add QA:why:bug:ID-1"));
         assert!(updated.contains("// end add"));
+    }
+
+    #[test]
+    fn apply_segments_aligns_with_code_indent_when_enabled() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.render.align_with_code_indent = true;
+        cfg.annotate.policies.add = "aligned".to_string();
+        let content = "    int value = 42;\n";
+
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Add,
+                old_lines: vec![],
+                new_lines: vec!["    int value = 42;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "123".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("    // aligned"));
+        assert!(updated.contains("    // end add"));
+    }
+
+    #[test]
+    fn apply_segments_wrap_blank_lines_option_controls_comment_boundary() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.policies.add = "boundary".to_string();
+        let segment = HunkSegment {
+            start_line: 1,
+            kind: ChangeKind::Add,
+            old_lines: vec![],
+            new_lines: vec![
+                "".to_string(),
+                "    int value = 42;".to_string(),
+                "".to_string(),
+            ],
+        };
+        let context = RuntimeContext {
+            reason: "why".to_string(),
+            reference_kind: "bug".to_string(),
+            reference_value: "ID-1".to_string(),
+            author_tag: "QA".to_string(),
+            date: "123".to_string(),
+        };
+        let content = "\n    int value = 42;\n\n";
+
+        cfg.annotate.render.wrap_blank_lines = true;
+        let wrapped = apply_c_line_segments(content, &[segment.clone()], &context, &cfg, "demo.c");
+        assert!(wrapped
+            .lines()
+            .next()
+            .expect("at least one output line")
+            .starts_with("//"));
+
+        cfg.annotate.render.wrap_blank_lines = false;
+        let trimmed = apply_c_line_segments(content, &[segment], &context, &cfg, "demo.c");
+        assert_eq!(trimmed.lines().next().unwrap_or_default(), "");
+        assert!(trimmed
+            .lines()
+            .nth(1)
+            .expect("comment line after leading blank")
+            .starts_with("//"));
     }
 
     #[test]

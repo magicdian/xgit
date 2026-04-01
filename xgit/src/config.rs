@@ -53,6 +53,7 @@ pub struct AnnotateConfig {
     pub staged: StagedConfig,
     pub form: AnnotateFormConfig,
     pub reference_kinds: Vec<String>,
+    pub render: AnnotateRenderConfig,
     pub policies: PolicyTemplates,
     pub file_rules: Vec<FileRuleConfig>,
 }
@@ -67,6 +68,13 @@ pub struct StagedConfig {
 #[serde(default)]
 pub struct AnnotateFormConfig {
     pub fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AnnotateRenderConfig {
+    pub align_with_code_indent: bool,
+    pub wrap_blank_lines: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -127,6 +135,7 @@ impl Default for AnnotateConfig {
             staged: StagedConfig::default(),
             form: AnnotateFormConfig::default(),
             reference_kinds: vec!["bug".to_string(), "req".to_string()],
+            render: AnnotateRenderConfig::default(),
             policies: PolicyTemplates::default(),
             file_rules: vec![
                 FileRuleConfig {
@@ -166,6 +175,15 @@ impl Default for AnnotateFormConfig {
                 "reference_kind".to_string(),
                 "reference_value".to_string(),
             ],
+        }
+    }
+}
+
+impl Default for AnnotateRenderConfig {
+    fn default() -> Self {
+        Self {
+            align_with_code_indent: false,
+            wrap_blank_lines: true,
         }
     }
 }
@@ -222,6 +240,7 @@ struct PartialAnnotateConfig {
     staged: Option<PartialStagedConfig>,
     form: Option<PartialAnnotateFormConfig>,
     reference_kinds: Option<Vec<String>>,
+    render: Option<PartialAnnotateRenderConfig>,
     policies: Option<PartialPolicyTemplates>,
     file_rules: Option<Vec<FileRuleConfig>>,
 }
@@ -236,6 +255,13 @@ struct PartialStagedConfig {
 #[serde(default)]
 struct PartialAnnotateFormConfig {
     fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct PartialAnnotateRenderConfig {
+    align_with_code_indent: Option<bool>,
+    wrap_blank_lines: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -285,6 +311,14 @@ impl AppConfig {
             }
             if let Some(reference_kinds) = annotate.reference_kinds {
                 self.annotate.reference_kinds = reference_kinds;
+            }
+            if let Some(render) = annotate.render {
+                if let Some(align_with_code_indent) = render.align_with_code_indent {
+                    self.annotate.render.align_with_code_indent = align_with_code_indent;
+                }
+                if let Some(wrap_blank_lines) = render.wrap_blank_lines {
+                    self.annotate.render.wrap_blank_lines = wrap_blank_lines;
+                }
             }
             if let Some(policies) = annotate.policies {
                 if let Some(add) = policies.add {
@@ -463,6 +497,7 @@ fn parse_env_partial(env_map: &HashMap<String, String>) -> Result<PartialAppConf
             }),
             form: None,
             reference_kinds: None,
+            render: None,
             policies: None,
             file_rules: None,
         });
@@ -536,5 +571,18 @@ lang = "zh-CN"
         let root = std::path::PathBuf::from("/tmp/repo");
         let expected = std::path::PathBuf::from("/tmp/repo/.xgit/config.toml");
         assert_eq!(project_config_path(&root), expected);
+    }
+
+    #[test]
+    fn render_options_can_be_overridden_by_layers() {
+        let global = r#"
+[annotate.render]
+align_with_code_indent = true
+wrap_blank_lines = false
+"#;
+        let env = HashMap::new();
+        let cfg = merge_layers(Some(global), None, &env, "zh-CN").unwrap();
+        assert!(cfg.annotate.render.align_with_code_indent);
+        assert!(!cfg.annotate.render.wrap_blank_lines);
     }
 }
