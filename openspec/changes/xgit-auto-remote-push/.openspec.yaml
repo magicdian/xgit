@@ -1,0 +1,5 @@
+name: xgit-auto-remote-push
+title: xgit - 自动识别 remote 并推送
+owner: TBD
+description: 自动识别单仓库 remote（如 origin/origin2）、支持 Gerrit refs/for/*，并在 push 时可选传递 --no-thin。
+status: draft

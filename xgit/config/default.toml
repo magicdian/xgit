@@ -1,0 +1,36 @@
+[ui]
+lang = "zh-CN"
+
+[features]
+push = true
+annotate = true
+
+[annotate.staged]
+include_untracked = false
+
+[annotate.form]
+fields = ["reason", "reference_kind", "reference_value"]
+
+[annotate]
+reference_kinds = ["bug", "req"]
+
+[annotate.policies]
+add = "{author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
+modify = "{author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
+del = "{author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
+
+[[annotate.file_rules]]
+pattern = "*.c"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.h"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.cpp"
+renderer = "c_line_block"
+
+[[annotate.file_rules]]
+pattern = "*.java"
+renderer = "c_line_block"
