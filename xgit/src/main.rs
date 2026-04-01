@@ -5,6 +5,7 @@ mod gitutils;
 mod i18n;
 mod remote;
 mod setup_ui;
+mod version;
 
 use anyhow::{bail, Result};
 use clap::error::ErrorKind;
@@ -60,6 +61,7 @@ fn build_runtime_command(catalog: &Catalog, runtime: &RuntimeConfig) -> Command 
     };
 
     Command::new("xgit")
+        .version(version::app_version())
         .about(catalog.t("app.about"))
         .subcommand(
             Command::new("push")
