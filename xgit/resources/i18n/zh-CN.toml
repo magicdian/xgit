@@ -153,7 +153,9 @@ error.annotate.latest_commit_root = "latest-commit 模式要求当前提交存�
 error.annotate.latest_commit_merge = "latest-commit 模式暂不支持 merge commit。"
 error.annotate.latest_commit_dirty = "latest-commit 模式要求工作区为干净状态。"
 error.annotate.staged_unstaged_conflict = "staged 模式无法安全改写 {path}：该文件仍有未暂存修改。请先处理该文件的工作区状态。"
+error.annotate.normalize_failed = "无法安全重建 {path} 的注释块。请检查已有注释结构是否完整且与当前模板兼容。"
 
 prompt.annotate.reason = "请输入 reason"
 prompt.annotate.reference_kind = "请输入引用类型"
 prompt.annotate.reference_value = "请输入引用值"
+prompt.annotate.reuse_context = "检测到可复用上下文 reason={reason} ({reference_kind}:{reference_value})，是否复用"

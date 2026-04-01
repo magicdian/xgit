@@ -5,11 +5,14 @@ use crate::config::{
 use crate::i18n::Catalog;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{Local, NaiveDateTime};
-use std::collections::BTreeMap;
+use regex::Regex;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 pub struct AnnotateOptions {
@@ -61,6 +64,61 @@ struct HunkSegment {
     new_lines: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct PreparedCLineFile {
+    change: FileChange,
+    logical_content: String,
+    segments: Vec<HunkSegment>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ContextReuseCandidate {
+    reason: Option<String>,
+    reference_kind: Option<String>,
+    reference_value: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingBlockContextDefaults {
+    reason: String,
+    reference_kind: String,
+    reference_value: String,
+}
+
+#[derive(Debug, Clone)]
+struct NormalizationResult {
+    logical_content: String,
+    segments: Vec<HunkSegment>,
+    context_candidates: Vec<ContextReuseCandidate>,
+}
+
+#[derive(Debug, Clone)]
+struct CandidateAnnotationBlock {
+    kind: ChangeKind,
+    start_line: usize,
+    end_line: usize,
+    code_start_line: usize,
+    code_end_line: usize,
+    shell_lines: Vec<usize>,
+    context_candidate: ContextReuseCandidate,
+}
+
+#[derive(Debug, Clone)]
+struct BlockPattern {
+    kind: ChangeKind,
+    start_contains_old_placeholder: bool,
+    start_lines: Vec<PatternLine>,
+    end_lines: Vec<PatternLine>,
+}
+
+#[derive(Debug, Clone)]
+struct PatternLine {
+    matcher: Regex,
+    capture: Regex,
+}
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 pub fn run(
     options: AnnotateOptions,
     config: &AppConfig,
@@ -72,7 +130,6 @@ pub fn run(
     }
 
     let repo_root = resolve_git_root(cwd)?;
-    let context = collect_runtime_context(&options, config, catalog, &repo_root)?;
     let changes = if options.latest_commit {
         collect_latest_commit_changes(&repo_root, catalog)?
     } else {
@@ -87,7 +144,9 @@ pub fn run(
         return Ok(());
     }
 
-    let mut applied = 0usize;
+    let mut prepared = Vec::<PreparedCLineFile>::new();
+    let mut context_candidates = Vec::<ContextReuseCandidate>::new();
+
     for change in &changes {
         let renderer = select_renderer(&change.path, &config.annotate.file_rules);
         match renderer.as_deref() {
@@ -105,7 +164,7 @@ pub fn run(
                     );
                 }
 
-                let Some(target_content) =
+                let Some(current_content) =
                     load_target_content(&repo_root, options.latest_commit, change)?
                 else {
                     println!(
@@ -115,25 +174,27 @@ pub fn run(
                     continue;
                 };
 
-                let segments = collect_hunk_segments(
-                    &repo_root,
-                    options.latest_commit,
-                    change,
-                    &target_content,
-                )?;
-                if segments.is_empty() {
-                    continue;
-                }
-
-                let updated = apply_c_line_segments(
-                    &target_content,
-                    &segments,
-                    &context,
+                let baseline_content =
+                    load_baseline_content(&repo_root, options.latest_commit, change)?;
+                let normalized = normalize_content_before_render(
+                    &baseline_content,
+                    &current_content,
                     config,
                     &change.path,
-                );
-                write_output_file(&repo_root, &change.path, &updated)?;
-                applied += 1;
+                )
+                .with_context(|| {
+                    catalog.tf(
+                        "error.annotate.normalize_failed",
+                        &[("path", change.path.clone())],
+                    )
+                })?;
+
+                context_candidates.extend(normalized.context_candidates.iter().cloned());
+                prepared.push(PreparedCLineFile {
+                    change: change.clone(),
+                    logical_content: normalized.logical_content,
+                    segments: normalized.segments,
+                });
             }
             Some(other) => {
                 println!(
@@ -154,6 +215,31 @@ pub fn run(
                 );
             }
         }
+    }
+
+    let reuse_defaults = resolve_reusable_context_defaults(&context_candidates);
+    let context = collect_runtime_context(
+        &options,
+        config,
+        catalog,
+        &repo_root,
+        reuse_defaults.as_ref(),
+    )?;
+
+    let mut applied = 0usize;
+    for file in &prepared {
+        if file.segments.is_empty() {
+            continue;
+        }
+        let updated = apply_c_line_segments(
+            &file.logical_content,
+            &file.segments,
+            &context,
+            config,
+            &file.change.path,
+        );
+        write_output_file(&repo_root, &file.change.path, &updated)?;
+        applied += 1;
     }
 
     if options.latest_commit {
@@ -182,14 +268,73 @@ fn collect_runtime_context(
     config: &AppConfig,
     catalog: &Catalog,
     cwd: &Path,
+    reuse_defaults: Option<&PendingBlockContextDefaults>,
 ) -> Result<RuntimeContext> {
     let fields = &config.annotate.form.fields;
     let mut reason = options.reason.clone().unwrap_or_default();
     let mut reference_kind = options.reference_kind.clone().unwrap_or_default();
     let mut reference_value = options.reference_value.clone().unwrap_or_default();
+    let mut reused_context = false;
+
+    let should_try_reuse = reason.is_empty()
+        && reference_kind.is_empty()
+        && reference_value.is_empty()
+        && fields.iter().any(|field| {
+            field == "reason" || field == "reference_kind" || field == "reference_value"
+        });
+    if should_try_reuse {
+        if let Some(defaults) = reuse_defaults {
+            let prompt = catalog.tf(
+                "prompt.annotate.reuse_context",
+                &[
+                    ("reason", defaults.reason.clone()),
+                    ("reference_kind", defaults.reference_kind.clone()),
+                    ("reference_value", defaults.reference_value.clone()),
+                ],
+            );
+            if prompt_yes_no(&prompt, true)? {
+                reason = defaults.reason.clone();
+                reference_kind = defaults.reference_kind.clone();
+                reference_value = defaults.reference_value.clone();
+                reused_context = true;
+            }
+        }
+    }
 
     if reason.is_empty() && fields.iter().any(|f| f == "reason") {
         reason = prompt_line(&catalog.t("prompt.annotate.reason"))?;
+    }
+
+    if reference_kind.is_empty() && fields.iter().any(|f| f == "reference_kind") {
+        let prompt = format!(
+            "{} [{}]",
+            catalog.t("prompt.annotate.reference_kind"),
+            config.annotate.reference_kinds.join(",")
+        );
+        reference_kind = prompt_line(&prompt)?;
+    }
+    if reference_kind.is_empty() && !config.annotate.reference_kinds.is_empty() {
+        reference_kind = config.annotate.reference_kinds[0].clone();
+    }
+
+    if !config.annotate.reference_kinds.is_empty()
+        && !config
+            .annotate
+            .reference_kinds
+            .iter()
+            .any(|k| k == &reference_kind)
+    {
+        if reused_context {
+            reference_kind.clear();
+        } else {
+            bail!(
+                "{}",
+                catalog.tf(
+                    "error.annotate.reference_kind_invalid",
+                    &[("kind", reference_kind.clone())]
+                )
+            );
+        }
     }
 
     if reference_kind.is_empty() && fields.iter().any(|f| f == "reference_kind") {
@@ -276,6 +421,723 @@ fn prompt_line(prompt: &str) -> Result<String> {
     let mut buffer = String::new();
     io::stdin().read_line(&mut buffer)?;
     Ok(buffer.trim().to_string())
+}
+
+fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
+    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
+    loop {
+        print!("{prompt} {suffix}: ");
+        io::stdout().flush()?;
+        let mut buffer = String::new();
+        io::stdin().read_line(&mut buffer)?;
+        let answer = buffer.trim().to_ascii_lowercase();
+        if answer.is_empty() {
+            return Ok(default_yes);
+        }
+        match answer.as_str() {
+            "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => continue,
+        }
+    }
+}
+
+fn resolve_reusable_context_defaults(
+    candidates: &[ContextReuseCandidate],
+) -> Option<PendingBlockContextDefaults> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let reason = unique_candidate_value(candidates.iter().map(|c| c.reason.as_deref()))?;
+    let reference_kind =
+        unique_candidate_value(candidates.iter().map(|c| c.reference_kind.as_deref()))?;
+    let reference_value =
+        unique_candidate_value(candidates.iter().map(|c| c.reference_value.as_deref()))?;
+    Some(PendingBlockContextDefaults {
+        reason,
+        reference_kind,
+        reference_value,
+    })
+}
+
+fn normalize_context_candidate(
+    candidate: &mut ContextReuseCandidate,
+    reference_kinds: &[String],
+) {
+    let Some(reference_kind) = candidate.reference_kind.clone() else {
+        return;
+    };
+    let normalized_kind = reference_kind.trim().to_string();
+    if reference_kinds
+        .iter()
+        .any(|kind| kind.as_str() == normalized_kind.as_str())
+    {
+        candidate.reference_kind = Some(normalized_kind);
+        return;
+    }
+
+    let Some(reason) = candidate.reason.clone() else {
+        return;
+    };
+    for expected_kind in reference_kinds {
+        let suffix = format!(" {}", expected_kind);
+        if normalized_kind.ends_with(&suffix) {
+            let moved = normalized_kind[..normalized_kind.len() - suffix.len()]
+                .trim()
+                .to_string();
+            if moved.is_empty() {
+                continue;
+            }
+            candidate.reason = Some(format!("{reason} {moved}").trim().to_string());
+            candidate.reference_kind = Some(expected_kind.clone());
+            return;
+        }
+    }
+}
+
+fn unique_candidate_value<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Option<String> {
+    let mut unique: Option<&str> = None;
+    for value in values {
+        let value = value?.trim();
+        if value.is_empty() {
+            return None;
+        }
+        if let Some(existing) = unique {
+            if existing != value {
+                return None;
+            }
+        } else {
+            unique = Some(value);
+        }
+    }
+    unique.map(std::string::ToString::to_string)
+}
+
+fn load_baseline_content(cwd: &Path, latest_commit: bool, change: &FileChange) -> Result<String> {
+    if change.from_untracked || change.kind == ChangeKind::Add {
+        return Ok(String::new());
+    }
+
+    let spec = if latest_commit {
+        format!("HEAD^:{}", change.path)
+    } else {
+        format!("HEAD:{}", change.path)
+    };
+    Ok(git_show_content(cwd, &spec)?.unwrap_or_default())
+}
+
+fn normalize_content_before_render(
+    baseline_content: &str,
+    current_content: &str,
+    config: &AppConfig,
+    path: &str,
+) -> Result<NormalizationResult> {
+    let mut current_lines = current_content
+        .lines()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>();
+    let block_patterns = build_block_patterns(config)?;
+    let mut blocks = find_candidate_blocks(&current_lines, config, &block_patterns, path)?;
+
+    let added_lines = added_line_numbers(baseline_content, current_content)?;
+    for block in &mut blocks {
+        let is_pending = block
+            .shell_lines
+            .iter()
+            .all(|line_idx| added_lines.contains(&(line_idx + 1)));
+        if !is_pending {
+            block.shell_lines.clear();
+        }
+    }
+
+    let pending = blocks
+        .into_iter()
+        .filter(|block| !block.shell_lines.is_empty())
+        .collect::<Vec<_>>();
+    let mut context_candidates = pending
+        .iter()
+        .map(|block| block.context_candidate.clone())
+        .collect::<Vec<_>>();
+    context_candidates.retain(|candidate| {
+        candidate.reason.is_some()
+            || candidate.reference_kind.is_some()
+            || candidate.reference_value.is_some()
+    });
+
+    if !pending.is_empty() {
+        let normalized_lines = restore_pending_blocks(&current_lines, &pending, path)?;
+        current_lines = normalized_lines;
+    }
+
+    let logical_content = if current_lines.is_empty() {
+        String::new()
+    } else {
+        let mut content = current_lines.join("\n");
+        if current_content.ends_with('\n') {
+            content.push('\n');
+        }
+        content
+    };
+    let segments = diff_segments_between_contents(baseline_content, &logical_content)?;
+    Ok(NormalizationResult {
+        logical_content,
+        segments,
+        context_candidates,
+    })
+}
+
+fn build_block_patterns(config: &AppConfig) -> Result<Vec<BlockPattern>> {
+    let mut patterns = Vec::new();
+    for (kind, template) in [
+        (ChangeKind::Add, &config.annotate.block_templates.add),
+        (ChangeKind::Modify, &config.annotate.block_templates.modify),
+        (ChangeKind::Delete, &config.annotate.block_templates.del),
+    ] {
+        let start_lines = template
+            .start
+            .lines()
+            .map(build_pattern_line)
+            .collect::<Result<Vec<_>>>()?;
+        let end_lines = template
+            .end
+            .lines()
+            .map(build_pattern_line)
+            .collect::<Result<Vec<_>>>()?;
+        if start_lines.is_empty() || end_lines.is_empty() {
+            continue;
+        }
+        patterns.push(BlockPattern {
+            kind,
+            start_contains_old_placeholder: template.start.contains("{old}"),
+            start_lines,
+            end_lines,
+        });
+    }
+    Ok(patterns)
+}
+
+fn build_pattern_line(template_line: &str) -> Result<PatternLine> {
+    Ok(PatternLine {
+        matcher: Regex::new(&template_line_to_match_regex(template_line))
+            .with_context(|| format!("invalid matcher regex for template line: {template_line}"))?,
+        capture: Regex::new(&template_line_to_capture_regex(template_line)).with_context(|| {
+            format!("invalid capture regex for template line: {template_line}")
+        })?,
+    })
+}
+
+#[derive(Debug, Clone)]
+enum TemplateToken {
+    Literal(String),
+    Placeholder(String),
+}
+
+fn tokenize_template_line(template_line: &str) -> Vec<TemplateToken> {
+    let mut tokens = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < template_line.len() {
+        let remaining = &template_line[cursor..];
+        let Some(open_idx) = remaining.find('{') else {
+            tokens.push(TemplateToken::Literal(remaining.to_string()));
+            break;
+        };
+
+        if open_idx > 0 {
+            tokens.push(TemplateToken::Literal(remaining[..open_idx].to_string()));
+        }
+        let start = cursor + open_idx;
+        let Some(close_rel) = template_line[start + 1..].find('}') else {
+            tokens.push(TemplateToken::Literal(template_line[start..].to_string()));
+            break;
+        };
+        let close = start + 1 + close_rel;
+        let name = &template_line[start + 1..close];
+        if !name.is_empty() && name.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_') {
+            tokens.push(TemplateToken::Placeholder(name.to_string()));
+        } else {
+            tokens.push(TemplateToken::Literal(template_line[start..=close].to_string()));
+        }
+        cursor = close + 1;
+    }
+    tokens
+}
+
+fn has_non_empty_literal_after(tokens: &[TemplateToken], index: usize) -> bool {
+    tokens.iter().skip(index + 1).any(|token| match token {
+        TemplateToken::Literal(text) => !text.is_empty(),
+        TemplateToken::Placeholder(_) => false,
+    })
+}
+
+fn template_line_to_match_regex(template_line: &str) -> String {
+    let mut pattern = String::from("^");
+    for token in tokenize_template_line(template_line) {
+        match token {
+            TemplateToken::Literal(text) => pattern.push_str(&regex::escape(&text)),
+            TemplateToken::Placeholder(_) => pattern.push_str(".*"),
+        }
+    }
+    pattern.push('$');
+    pattern
+}
+
+fn template_line_to_capture_regex(template_line: &str) -> String {
+    let tokens = tokenize_template_line(template_line);
+    let mut pattern = String::from("^");
+    for (idx, token) in tokens.iter().enumerate() {
+        match token {
+            TemplateToken::Literal(text) => pattern.push_str(&regex::escape(text)),
+            TemplateToken::Placeholder(name) => {
+                let wildcard = if has_non_empty_literal_after(&tokens, idx) {
+                    ".*?"
+                } else {
+                    ".*"
+                };
+                match name.as_str() {
+                    "reason" | "reference_kind" | "reference_value" => {
+                        pattern.push_str(&format!("(?P<{name}>{wildcard})"))
+                    }
+                    _ => pattern.push_str(wildcard),
+                }
+            }
+        }
+    }
+    pattern.push('$');
+    pattern
+}
+
+fn find_candidate_blocks(
+    lines: &[String],
+    config: &AppConfig,
+    block_patterns: &[BlockPattern],
+    path: &str,
+) -> Result<Vec<CandidateAnnotationBlock>> {
+    let mut blocks = Vec::new();
+    for line_idx in 0..lines.len() {
+        let mut matches = Vec::new();
+        for pattern in block_patterns {
+            if let Some((indent, context_candidate)) = try_match_block_start(lines, line_idx, pattern) {
+                matches.push((pattern, indent, context_candidate));
+            }
+        }
+        if matches.is_empty() {
+            continue;
+        }
+        matches.sort_by_key(|(pattern, _, _)| std::cmp::Reverse(pattern.start_lines.len()));
+        let (pattern, indent, mut context_candidate) = matches.remove(0);
+        normalize_context_candidate(&mut context_candidate, &config.annotate.reference_kinds);
+        let start_len = pattern.start_lines.len();
+        let search_start = line_idx + start_len;
+        let Some(end_start) = find_matching_end(lines, search_start, pattern, &indent) else {
+            bail!("{}: unmatched annotation block start at line {}", path, line_idx + 1);
+        };
+        let end_len = pattern.end_lines.len();
+        let end_line = end_start + end_len;
+        let interior = &lines[search_start..end_start];
+        let old_region_len = parse_old_region_len(
+            &pattern.kind,
+            pattern.start_contains_old_placeholder,
+            interior,
+            config,
+            &indent,
+            path,
+            line_idx + 1,
+        )?;
+        if old_region_len > interior.len() {
+            bail!("{}: failed to determine old-code region", path);
+        }
+        let code_start_line = search_start + old_region_len;
+        let code_end_line = end_start;
+        if pattern.kind == ChangeKind::Delete {
+            if code_start_line != code_end_line {
+                bail!("{}: delete block contains ambiguous code body", path);
+            }
+        } else if code_start_line >= code_end_line {
+            bail!("{}: block at line {} has empty code body", path, line_idx + 1);
+        }
+
+        let mut shell_lines = Vec::new();
+        shell_lines.extend(line_idx..search_start);
+        shell_lines.extend(search_start..code_start_line);
+        shell_lines.extend(end_start..end_line);
+        blocks.push(CandidateAnnotationBlock {
+            kind: pattern.kind.clone(),
+            start_line: line_idx,
+            end_line,
+            code_start_line,
+            code_end_line,
+            shell_lines,
+            context_candidate,
+        });
+    }
+    Ok(blocks)
+}
+
+fn try_match_block_start(
+    lines: &[String],
+    line_idx: usize,
+    pattern: &BlockPattern,
+) -> Option<(String, ContextReuseCandidate)> {
+    if line_idx + pattern.start_lines.len() > lines.len() {
+        return None;
+    }
+    let first_line = &lines[line_idx];
+    let indent = first_line
+        .chars()
+        .take_while(|ch| ch.is_whitespace())
+        .collect::<String>();
+    let mut candidate = ContextReuseCandidate::default();
+    for (offset, pattern_line) in pattern.start_lines.iter().enumerate() {
+        let line = lines.get(line_idx + offset)?;
+        let content = line.strip_prefix(&indent)?;
+        if !pattern_line.matcher.is_match(content) {
+            return None;
+        }
+        if let Some(caps) = pattern_line.capture.captures(content) {
+            for (field, slot) in [
+                ("reason", &mut candidate.reason),
+                ("reference_kind", &mut candidate.reference_kind),
+                ("reference_value", &mut candidate.reference_value),
+            ] {
+                if let Some(value) = caps.name(field) {
+                    let value = value.as_str().trim().to_string();
+                    if value.is_empty() {
+                        continue;
+                    }
+                    if let Some(existing) = slot {
+                        if existing != &value {
+                            *slot = None;
+                        }
+                    } else {
+                        *slot = Some(value);
+                    }
+                }
+            }
+        }
+    }
+    Some((indent, candidate))
+}
+
+fn match_pattern_with_indent(
+    lines: &[String],
+    start: usize,
+    pattern_lines: &[PatternLine],
+    indent: &str,
+) -> bool {
+    if start + pattern_lines.len() > lines.len() {
+        return false;
+    }
+    pattern_lines.iter().enumerate().all(|(offset, pattern_line)| {
+        lines
+            .get(start + offset)
+            .and_then(|line| line.strip_prefix(indent))
+            .is_some_and(|content| pattern_line.matcher.is_match(content))
+    })
+}
+
+fn find_matching_end(
+    lines: &[String],
+    mut cursor: usize,
+    pattern: &BlockPattern,
+    indent: &str,
+) -> Option<usize> {
+    let mut nesting = 0usize;
+    while cursor < lines.len() {
+        if match_pattern_with_indent(lines, cursor, &pattern.start_lines, indent) {
+            nesting += 1;
+            cursor += pattern.start_lines.len();
+            continue;
+        }
+        if match_pattern_with_indent(lines, cursor, &pattern.end_lines, indent) {
+            if nesting == 0 {
+                return Some(cursor);
+            }
+            nesting = nesting.saturating_sub(1);
+            cursor += pattern.end_lines.len();
+            continue;
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn parse_old_region_len(
+    kind: &ChangeKind,
+    start_contains_old_placeholder: bool,
+    interior: &[String],
+    config: &AppConfig,
+    indent: &str,
+    path: &str,
+    start_line: usize,
+) -> Result<usize> {
+    if *kind == ChangeKind::Add {
+        return Ok(0);
+    }
+    match &config.annotate.old_code.mode {
+        Some(AnnotateOldCodeMode::None) => Ok(0),
+        Some(AnnotateOldCodeMode::LineComment) => {
+            parse_line_comment_old_region(interior, &config.annotate.old_code.line_comment, indent)
+                .with_context(|| {
+                    format!("{path}: failed to parse line-comment old region at line {start_line}")
+                })
+        }
+        Some(AnnotateOldCodeMode::BlockComment) => parse_block_comment_old_region(
+            interior,
+            &config.annotate.old_code.block_comment,
+            indent,
+        )
+        .with_context(|| format!("{path}: failed to parse block-comment old region at line {start_line}")),
+        None => {
+            if start_contains_old_placeholder {
+                return Ok(0);
+            }
+            if interior.is_empty() {
+                bail!("{path}: legacy old-code section missing at line {start_line}");
+            }
+            let header = c_line_comment("old:", indent);
+            if interior[0] != header {
+                bail!("{path}: legacy old-code header missing at line {start_line}");
+            }
+            let mut consumed = 1usize;
+            let old_prefix = format!("{indent}//   ");
+            while consumed < interior.len() {
+                if interior[consumed].starts_with(&old_prefix) {
+                    consumed += 1;
+                } else {
+                    break;
+                }
+            }
+            Ok(consumed)
+        }
+    }
+}
+
+fn parse_line_comment_old_region(
+    interior: &[String],
+    config: &AnnotateOldCodeLineCommentConfig,
+    indent: &str,
+) -> Result<usize> {
+    if interior.is_empty() {
+        bail!("missing old-code section");
+    }
+    let mut index = 0usize;
+    if config.layout == AnnotateOldCodeLineLayout::HeaderBody && !config.header.trim().is_empty() {
+        let expected = c_line_comment(config.header.as_str(), indent);
+        if interior.get(index) != Some(&expected) {
+            bail!("line-comment header not found");
+        }
+        index += 1;
+    }
+
+    let line_prefix = format!("{indent}// ");
+    let mut consumed_body = 0usize;
+    while let Some(line) = interior.get(index) {
+        let Some(payload) = line.strip_prefix(&line_prefix) else {
+            break;
+        };
+        if !payload.starts_with(&config.body_prefix) {
+            break;
+        }
+        if !config.body_suffix.is_empty() && !payload.ends_with(&config.body_suffix) {
+            break;
+        }
+        consumed_body += 1;
+        index += 1;
+    }
+    if consumed_body == 0 {
+        bail!("line-comment old-code body not found");
+    }
+    Ok(index)
+}
+
+fn parse_block_comment_old_region(
+    interior: &[String],
+    config: &AnnotateOldCodeBlockCommentConfig,
+    indent: &str,
+) -> Result<usize> {
+    if interior.is_empty() {
+        bail!("missing block-comment old-code section");
+    }
+    let header = if config.title.trim().is_empty() {
+        format!("{indent}/*")
+    } else {
+        format!("{indent}/* {}", config.title)
+    };
+    if interior[0] != header {
+        bail!("block-comment header not found");
+    }
+
+    let body_prefix = format!("{indent} * {}", config.body_prefix);
+    let end_line = format!("{indent} */");
+    let mut index = 1usize;
+    let mut seen_body = false;
+    while let Some(line) = interior.get(index) {
+        if line == &end_line {
+            if !seen_body {
+                bail!("block-comment old-code body not found");
+            }
+            return Ok(index + 1);
+        }
+        if line.starts_with(&body_prefix) {
+            seen_body = true;
+            index += 1;
+            continue;
+        }
+        bail!("invalid block-comment old-code line");
+    }
+    bail!("block-comment old-code terminator not found")
+}
+
+fn added_line_numbers(baseline_content: &str, current_content: &str) -> Result<BTreeSet<usize>> {
+    let mut added = BTreeSet::new();
+    for segment in diff_segments_between_contents(baseline_content, current_content)? {
+        if segment.kind == ChangeKind::Delete {
+            continue;
+        }
+        for offset in 0..segment.new_lines.len() {
+            added.insert(segment.start_line + offset);
+        }
+    }
+    Ok(added)
+}
+
+fn restore_pending_blocks(
+    original_lines: &[String],
+    pending_blocks: &[CandidateAnnotationBlock],
+    path: &str,
+) -> Result<Vec<String>> {
+    let mut blocks = pending_blocks.to_vec();
+    blocks.sort_by_key(|block| (block.start_line, std::cmp::Reverse(block.end_line)));
+
+    let mut children = vec![Vec::<usize>::new(); blocks.len()];
+    let mut roots = Vec::<usize>::new();
+    let mut stack = Vec::<usize>::new();
+    for index in 0..blocks.len() {
+        while let Some(&last) = stack.last() {
+            if blocks[index].start_line >= blocks[last].end_line {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        if let Some(&parent) = stack.last() {
+            if blocks[index].end_line > blocks[parent].end_line {
+                bail!("{path}: overlapping pending annotation blocks");
+            }
+            if blocks[index].start_line < blocks[parent].code_start_line
+                || blocks[index].end_line > blocks[parent].code_end_line
+            {
+                bail!("{path}: pending block overlaps annotation shell");
+            }
+            children[parent].push(index);
+        } else {
+            roots.push(index);
+        }
+        stack.push(index);
+    }
+
+    Ok(render_range_without_shell(
+        0,
+        original_lines.len(),
+        &roots,
+        original_lines,
+        &blocks,
+        &children,
+    ))
+}
+
+fn render_range_without_shell(
+    start: usize,
+    end: usize,
+    block_indices: &[usize],
+    original_lines: &[String],
+    blocks: &[CandidateAnnotationBlock],
+    children: &[Vec<usize>],
+) -> Vec<String> {
+    let mut output = Vec::new();
+    let mut cursor = start;
+    for &index in block_indices {
+        let block = &blocks[index];
+        while cursor < block.start_line {
+            output.push(original_lines[cursor].clone());
+            cursor += 1;
+        }
+        output.extend(render_block_without_shell(
+            index,
+            original_lines,
+            blocks,
+            children,
+        ));
+        cursor = block.end_line;
+    }
+    while cursor < end {
+        output.push(original_lines[cursor].clone());
+        cursor += 1;
+    }
+    output
+}
+
+fn render_block_without_shell(
+    index: usize,
+    original_lines: &[String],
+    blocks: &[CandidateAnnotationBlock],
+    children: &[Vec<usize>],
+) -> Vec<String> {
+    let block = &blocks[index];
+    if block.kind == ChangeKind::Delete {
+        return Vec::new();
+    }
+    render_range_without_shell(
+        block.code_start_line,
+        block.code_end_line,
+        &children[index],
+        original_lines,
+        blocks,
+        children,
+    )
+}
+
+fn diff_segments_between_contents(baseline_content: &str, current_content: &str) -> Result<Vec<HunkSegment>> {
+    let patch = diff_patch_between_contents(baseline_content, current_content)?;
+    Ok(parse_hunk_segments(&patch))
+}
+
+fn diff_patch_between_contents(baseline_content: &str, current_content: &str) -> Result<String> {
+    let temp_base = create_temp_file_with_content("xgit-annotate-base", baseline_content)?;
+    let temp_current = create_temp_file_with_content("xgit-annotate-current", current_content)?;
+    let output = Command::new("git")
+        .args([
+            "diff",
+            "--no-index",
+            "--unified=0",
+            "--",
+            temp_base.to_string_lossy().as_ref(),
+            temp_current.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .context("failed to run git diff --no-index")?;
+    let _ = fs::remove_file(&temp_base);
+    let _ = fs::remove_file(&temp_current);
+
+    match output.status.code() {
+        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&output.stdout).to_string()),
+        _ => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            bail!("git diff --no-index failed: {stderr}");
+        }
+    }
+}
+
+fn create_temp_file_with_content(prefix: &str, content: &str) -> Result<PathBuf> {
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let filename = format!("{prefix}-{nanos}-{counter}.tmp");
+    let path = std::env::temp_dir().join(filename);
+    fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path)
 }
 
 fn collect_staged_changes(cwd: &Path, include_untracked: bool) -> Result<Vec<FileChange>> {
@@ -400,32 +1262,6 @@ fn git_show_content(cwd: &Path, spec: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
-}
-
-fn collect_hunk_segments(
-    cwd: &Path,
-    latest_commit: bool,
-    change: &FileChange,
-    current_content: &str,
-) -> Result<Vec<HunkSegment>> {
-    if change.from_untracked {
-        let lines = current_content
-            .lines()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
-        if lines.is_empty() {
-            return Ok(vec![]);
-        }
-        return Ok(vec![HunkSegment {
-            start_line: 1,
-            kind: ChangeKind::Add,
-            old_lines: vec![],
-            new_lines: lines,
-        }]);
-    }
-
-    let patch = diff_patch_for_file(cwd, latest_commit, &change.path)?;
-    Ok(parse_hunk_segments(&patch))
 }
 
 fn parse_hunk_segments(patch: &str) -> Vec<HunkSegment> {
@@ -837,14 +1673,6 @@ fn has_unstaged_changes_for_path(cwd: &Path, file: &str) -> Result<bool> {
     Ok(!output.trim().is_empty())
 }
 
-fn diff_patch_for_file(cwd: &Path, latest_commit: bool, file: &str) -> Result<String> {
-    if latest_commit {
-        git_stdout(cwd, &["diff", "--unified=0", "HEAD^", "HEAD", "--", file])
-    } else {
-        git_stdout(cwd, &["diff", "--staged", "--unified=0", "--", file])
-    }
-}
-
 fn git_stdout(cwd: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .current_dir(cwd)
@@ -880,8 +1708,10 @@ fn matches_pattern(path: &str, pattern: &str) -> bool {
 mod tests {
     use super::{
         apply_c_line_segments, collect_latest_commit_changes, collect_runtime_context,
-        collect_staged_changes, git_stdout, matches_pattern, parse_hunk_segments,
-        parse_name_status_output, run, ChangeKind, HunkSegment, RuntimeContext,
+        collect_staged_changes, git_stdout, load_baseline_content, matches_pattern,
+        normalize_content_before_render, parse_hunk_segments, parse_name_status_output,
+        resolve_reusable_context_defaults, run, ChangeKind, ContextReuseCandidate, FileChange,
+        HunkSegment, RuntimeContext,
     };
     use crate::config::{merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig};
     use chrono::NaiveDateTime;
@@ -1321,6 +2151,7 @@ end = "//@}"
             &cfg,
             &catalog,
             Path::new("."),
+            None,
         )
         .unwrap();
         assert_eq!(ctx.reason, "reason");
@@ -1466,6 +2297,195 @@ end = "//@}"
 
         let file = fs::read_to_string(sub.join("DnsEvent.cpp")).unwrap();
         assert!(file.contains("subdir"));
+    }
+
+    #[test]
+    fn pending_add_blocks_rebuild_to_single_add_wrapper() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
+        cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.block_templates.modify.start = "// modify {reason}".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+        cfg.annotate.block_templates.del.start = "// del {reason}".to_string();
+        cfg.annotate.block_templates.del.end = "// end del".to_string();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
+
+        let baseline = "";
+        let current =
+            "// add first\n// add first\nint a = 1;\n// end add\nint b = 2;\n// end add\n";
+        let normalized = normalize_content_before_render(baseline, current, &cfg, "demo.c").unwrap();
+        assert_eq!(normalized.logical_content, "int a = 1;\nint b = 2;\n");
+        assert_eq!(normalized.segments.len(), 1);
+        assert_eq!(normalized.segments[0].kind, ChangeKind::Add);
+
+        let rendered = apply_c_line_segments(
+            &normalized.logical_content,
+            &normalized.segments,
+            &RuntimeContext {
+                reason: "final".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "2026-04-01".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+        assert_eq!(rendered.matches("// add final").count(), 1);
+        assert_eq!(rendered.matches("// end add").count(), 1);
+    }
+
+    #[test]
+    fn pending_modify_and_delete_blocks_restore_and_rebuild() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
+        cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.block_templates.modify.start = "// modify {reason}".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+        cfg.annotate.block_templates.del.start = "// del {reason}".to_string();
+        cfg.annotate.block_templates.del.end = "// end del".to_string();
+        cfg.annotate.old_code.mode = None;
+
+        let baseline_modify = "int a = 1;\n";
+        let current_modify =
+            "// modify old\n// old:\n//   int a = 1;\nint a = 3;\n// end modify\n";
+        let normalized_modify =
+            normalize_content_before_render(baseline_modify, current_modify, &cfg, "demo.c")
+                .unwrap();
+        assert_eq!(normalized_modify.logical_content, "int a = 3;\n");
+        assert_eq!(normalized_modify.segments.len(), 1);
+        assert_eq!(normalized_modify.segments[0].kind, ChangeKind::Modify);
+
+        let baseline_delete = "int a = 1;\n";
+        let current_delete = "// del old\n// old:\n//   int a = 1;\n// end del\n";
+        let normalized_delete =
+            normalize_content_before_render(baseline_delete, current_delete, &cfg, "demo.c")
+                .unwrap();
+        assert_eq!(normalized_delete.logical_content, "");
+        assert_eq!(normalized_delete.segments.len(), 1);
+        assert_eq!(normalized_delete.segments[0].kind, ChangeKind::Delete);
+    }
+
+    #[test]
+    fn history_annotation_blocks_are_not_rolled_back() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
+        cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.block_templates.modify.start = "// modify {reason}".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+        cfg.annotate.block_templates.del.start = "// del {reason}".to_string();
+        cfg.annotate.block_templates.del.end = "// end del".to_string();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
+
+        let baseline = "// add old\nint a = 1;\n// end add\n";
+        let current = "// add old\nint a = 1;\nint b = 2;\n// end add\n";
+        let normalized = normalize_content_before_render(baseline, current, &cfg, "demo.c").unwrap();
+        assert_eq!(normalized.logical_content, current);
+        assert_eq!(normalized.segments.len(), 1);
+        assert_eq!(normalized.segments[0].kind, ChangeKind::Add);
+        assert_eq!(normalized.segments[0].new_lines, vec!["int b = 2;".to_string()]);
+    }
+
+    #[test]
+    fn reusable_context_defaults_require_unique_consensus() {
+        let accepted = resolve_reusable_context_defaults(&[
+            ContextReuseCandidate {
+                reason: Some("sync".to_string()),
+                reference_kind: Some("bug".to_string()),
+                reference_value: Some("ID-7".to_string()),
+            },
+            ContextReuseCandidate {
+                reason: Some("sync".to_string()),
+                reference_kind: Some("bug".to_string()),
+                reference_value: Some("ID-7".to_string()),
+            },
+        ]);
+        assert!(accepted.is_some());
+
+        let conflicted = resolve_reusable_context_defaults(&[
+            ContextReuseCandidate {
+                reason: Some("sync".to_string()),
+                reference_kind: Some("bug".to_string()),
+                reference_value: Some("ID-7".to_string()),
+            },
+            ContextReuseCandidate {
+                reason: Some("another".to_string()),
+                reference_kind: Some("bug".to_string()),
+                reference_value: Some("ID-7".to_string()),
+            },
+        ]);
+        assert!(conflicted.is_none());
+    }
+
+    #[test]
+    fn context_extraction_recovers_kind_when_reason_contains_spaces() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.reference_kinds = vec!["bug".to_string(), "req".to_string()];
+        cfg.annotate.block_templates.del.start =
+            "// del by {author_tag} {date} for {reason} {reference_kind}:{reference_value} {@"
+                .to_string();
+        cfg.annotate.block_templates.del.end = "//@}".to_string();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
+
+        let current =
+            "// del by jingd 2026-04-01 for test delete code by commit req:1234567 {@\n//@}\n";
+        let normalized = normalize_content_before_render("", current, &cfg, "demo.c").unwrap();
+        let defaults = resolve_reusable_context_defaults(&normalized.context_candidates)
+            .expect("expected reusable context");
+        assert_eq!(defaults.reason, "test delete code by commit");
+        assert_eq!(defaults.reference_kind, "req");
+        assert_eq!(defaults.reference_value, "1234567");
+    }
+
+    #[test]
+    fn malformed_block_boundary_fails_conservatively() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
+        cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
+        let baseline = "";
+        let malformed = "// add missing-end\nint a = 1;\n";
+        let result = normalize_content_before_render(baseline, malformed, &cfg, "demo.c");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn overlapping_pending_blocks_fail_conservatively() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
+        cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.block_templates.modify.start = "// modify {reason}".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
+
+        let baseline = "";
+        let overlapping = "// add outer\n// modify inner\nint a = 1;\n// end add\n// end modify\n";
+        let result = normalize_content_before_render(baseline, overlapping, &cfg, "demo.c");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn latest_commit_baseline_reads_head_parent() {
+        let repo = init_test_repo();
+        fs::write(repo.path().join("demo.c"), "int a = 1;\n").unwrap();
+        run_git(repo.path(), &["add", "demo.c"]);
+        run_git(repo.path(), &["commit", "-m", "init"]);
+
+        fs::write(repo.path().join("demo.c"), "int a = 2;\n").unwrap();
+        run_git(repo.path(), &["add", "demo.c"]);
+        run_git(repo.path(), &["commit", "-m", "update"]);
+
+        let baseline = load_baseline_content(
+            repo.path(),
+            true,
+            &FileChange {
+                path: "demo.c".to_string(),
+                kind: ChangeKind::Modify,
+                from_untracked: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(baseline, "int a = 1;\n");
     }
 
     fn init_test_repo() -> TempDir {

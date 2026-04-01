@@ -153,7 +153,9 @@ error.annotate.latest_commit_root = "latest-commit mode requires a non-root comm
 error.annotate.latest_commit_merge = "latest-commit mode does not support merge commits."
 error.annotate.latest_commit_dirty = "latest-commit mode requires a clean working tree."
 error.annotate.staged_unstaged_conflict = "Staged mode cannot safely rewrite {path} because unstaged changes exist. Please commit/stage/clean this file first."
+error.annotate.normalize_failed = "Cannot safely rebuild annotation blocks for {path}. Please verify existing block boundaries and template compatibility."
 
 prompt.annotate.reason = "Enter reason"
 prompt.annotate.reference_kind = "Enter reference kind"
 prompt.annotate.reference_value = "Enter reference value"
+prompt.annotate.reuse_context = "Reusable context detected reason={reason} ({reference_kind}:{reference_value}). Reuse it?"
