@@ -571,13 +571,30 @@ fn render_c_line_block(
     path: &str,
     code_lines_range: Option<(usize, usize)>,
 ) -> (Vec<String>, Vec<String>) {
-    let template = match segment.kind {
-        ChangeKind::Add => &config.annotate.policies.add,
-        ChangeKind::Modify => &config.annotate.policies.modify,
-        ChangeKind::Delete => &config.annotate.policies.del,
+    let (start_template, end_template) = match segment.kind {
+        ChangeKind::Add => (
+            &config.annotate.block_templates.add.start,
+            &config.annotate.block_templates.add.end,
+        ),
+        ChangeKind::Modify => (
+            &config.annotate.block_templates.modify.start,
+            &config.annotate.block_templates.modify.end,
+        ),
+        ChangeKind::Delete => (
+            &config.annotate.block_templates.del.start,
+            &config.annotate.block_templates.del.end,
+        ),
     };
-    let rendered = expand_policy_template(
-        template,
+    let rendered_start = expand_policy_template(
+        start_template,
+        context,
+        segment.kind.key(),
+        path,
+        &segment.old_lines,
+        &segment.new_lines,
+    );
+    let rendered_end = expand_policy_template(
+        end_template,
         context,
         segment.kind.key(),
         path,
@@ -586,13 +603,13 @@ fn render_c_line_block(
     );
 
     let comment_indent = resolve_comment_indent(segment, config, code_lines_range);
-    let mut prefix = rendered
+    let mut prefix = rendered_start
         .lines()
-        .map(|line| c_line_comment(line, comment_indent.as_str()))
+        .map(|line| format!("{}{}", comment_indent, line))
         .collect::<Vec<_>>();
     if (segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete)
         && !segment.old_lines.is_empty()
-        && !template.contains("{old}")
+        && !start_template.contains("{old}")
     {
         prefix.push(c_line_comment("old:", comment_indent.as_str()));
         for old in &segment.old_lines {
@@ -600,10 +617,10 @@ fn render_c_line_block(
         }
     }
 
-    let suffix = vec![c_line_comment(
-        &format!("end {}", segment.kind.key()),
-        comment_indent.as_str(),
-    )];
+    let suffix = rendered_end
+        .lines()
+        .map(|line| format!("{}{}", comment_indent, line))
+        .collect::<Vec<_>>();
     (prefix, suffix)
 }
 
@@ -776,7 +793,8 @@ mod tests {
         collect_staged_changes, git_stdout, matches_pattern, parse_hunk_segments,
         parse_name_status_output, run, ChangeKind, HunkSegment, RuntimeContext,
     };
-    use crate::config::AppConfig;
+    use crate::config::{merge_layers, AppConfig};
+    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
     use std::process::Command;
@@ -825,8 +843,9 @@ index a1b2c3d..e4f5a6b 100644
     #[test]
     fn apply_segments_wraps_changed_lines() {
         let mut cfg = AppConfig::default();
-        cfg.annotate.policies.add =
-            "add {author_tag}:{reason}:{reference_kind}:{reference_value}".to_string();
+        cfg.annotate.block_templates.add.start =
+            "// add {author_tag}:{reason}:{reference_kind}:{reference_value}".to_string();
+        cfg.annotate.block_templates.add.end = "// end add".to_string();
         let content = "int a = 1;\nint b = 2;\n";
         let updated = apply_c_line_segments(
             content,
@@ -851,10 +870,104 @@ index a1b2c3d..e4f5a6b 100644
     }
 
     #[test]
+    fn apply_segments_honors_custom_end_template() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.start = "// add block {@".to_string();
+        cfg.annotate.block_templates.add.end = "//@}".to_string();
+        let content = "int a = 1;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Add,
+                old_lines: vec![],
+                new_lines: vec!["int a = 1;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "123".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("// add block {@"));
+        assert!(updated.contains("//@}"));
+        assert!(!updated.contains("// end add"));
+    }
+
+    #[test]
+    fn apply_segments_renders_with_legacy_policy_fallback_config() {
+        let project = r#"
+[annotate.policies]
+add = "legacy {author_tag}:{reason}"
+"#;
+        let cfg = merge_layers(None, Some(project), &HashMap::new(), "zh-CN").unwrap();
+        let content = "int a = 1;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Add,
+                old_lines: vec![],
+                new_lines: vec!["int a = 1;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "123".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("// legacy QA:why"));
+        assert!(updated.contains("// end add"));
+    }
+
+    #[test]
+    fn apply_segments_renders_with_block_templates_from_config_layer() {
+        let project = r#"
+[annotate.block_templates.add]
+start = "// add by {author_tag} {@"
+end = "//@}"
+"#;
+        let cfg = merge_layers(None, Some(project), &HashMap::new(), "zh-CN").unwrap();
+        let content = "int a = 1;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Add,
+                old_lines: vec![],
+                new_lines: vec!["int a = 1;".to_string()],
+            }],
+            &RuntimeContext {
+                reason: "why".to_string(),
+                reference_kind: "bug".to_string(),
+                reference_value: "ID-1".to_string(),
+                author_tag: "QA".to_string(),
+                date: "123".to_string(),
+            },
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("// add by QA {@"));
+        assert!(updated.contains("//@}"));
+    }
+
+    #[test]
     fn apply_segments_aligns_with_code_indent_when_enabled() {
         let mut cfg = AppConfig::default();
         cfg.annotate.render.align_with_code_indent = true;
-        cfg.annotate.policies.add = "aligned".to_string();
+        cfg.annotate.block_templates.add.start = "// aligned".to_string();
+        cfg.annotate.block_templates.add.end = "// end add".to_string();
         let content = "    int value = 42;\n";
 
         let updated = apply_c_line_segments(
@@ -883,7 +996,8 @@ index a1b2c3d..e4f5a6b 100644
     #[test]
     fn apply_segments_wrap_blank_lines_option_controls_comment_boundary() {
         let mut cfg = AppConfig::default();
-        cfg.annotate.policies.add = "boundary".to_string();
+        cfg.annotate.block_templates.add.start = "// boundary".to_string();
+        cfg.annotate.block_templates.add.end = "// end add".to_string();
         let segment = HunkSegment {
             start_line: 1,
             kind: ChangeKind::Add,

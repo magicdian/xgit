@@ -18,10 +18,17 @@ reference_kinds = ["bug", "req"]
 align_with_code_indent = false
 wrap_blank_lines = true
 
-[annotate.policies]
-add = "{author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
-modify = "{author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
-del = "{author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
+[annotate.block_templates.add]
+start = "// {author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
+end = "// end add"
+
+[annotate.block_templates.modify]
+start = "// {author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
+end = "// end modify"
+
+[annotate.block_templates.del]
+start = "// {author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
+end = "// end del"
 
 [[annotate.file_rules]]
 pattern = "*.c"

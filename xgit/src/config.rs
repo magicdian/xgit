@@ -54,7 +54,7 @@ pub struct AnnotateConfig {
     pub form: AnnotateFormConfig,
     pub reference_kinds: Vec<String>,
     pub render: AnnotateRenderConfig,
-    pub policies: PolicyTemplates,
+    pub block_templates: BlockTemplates,
     pub file_rules: Vec<FileRuleConfig>,
 }
 
@@ -79,10 +79,17 @@ pub struct AnnotateRenderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct PolicyTemplates {
-    pub add: String,
-    pub modify: String,
-    pub del: String,
+pub struct BlockTemplates {
+    pub add: BlockTemplate,
+    pub modify: BlockTemplate,
+    pub del: BlockTemplate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct BlockTemplate {
+    pub start: String,
+    pub end: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -136,7 +143,7 @@ impl Default for AnnotateConfig {
             form: AnnotateFormConfig::default(),
             reference_kinds: vec!["bug".to_string(), "req".to_string()],
             render: AnnotateRenderConfig::default(),
-            policies: PolicyTemplates::default(),
+            block_templates: BlockTemplates::default(),
             file_rules: vec![
                 FileRuleConfig {
                     pattern: "*.c".to_string(),
@@ -188,16 +195,33 @@ impl Default for AnnotateRenderConfig {
     }
 }
 
-impl Default for PolicyTemplates {
+impl Default for BlockTemplates {
     fn default() -> Self {
         Self {
-            add: "{author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
-                .to_string(),
-            modify:
-                "{author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
+            add: BlockTemplate {
+                start: "// {author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
                     .to_string(),
-            del: "{author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
-                .to_string(),
+                end: compatibility_end_template("add"),
+            },
+            modify: BlockTemplate {
+                start: "// {author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
+                    .to_string(),
+                end: compatibility_end_template("modify"),
+            },
+            del: BlockTemplate {
+                start: "// {author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
+                    .to_string(),
+                end: compatibility_end_template("del"),
+            },
+        }
+    }
+}
+
+impl Default for BlockTemplate {
+    fn default() -> Self {
+        Self {
+            start: String::new(),
+            end: String::new(),
         }
     }
 }
@@ -241,6 +265,7 @@ struct PartialAnnotateConfig {
     form: Option<PartialAnnotateFormConfig>,
     reference_kinds: Option<Vec<String>>,
     render: Option<PartialAnnotateRenderConfig>,
+    block_templates: Option<PartialBlockTemplates>,
     policies: Option<PartialPolicyTemplates>,
     file_rules: Option<Vec<FileRuleConfig>>,
 }
@@ -270,6 +295,21 @@ struct PartialPolicyTemplates {
     add: Option<String>,
     modify: Option<String>,
     del: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct PartialBlockTemplates {
+    add: Option<PartialBlockTemplate>,
+    modify: Option<PartialBlockTemplate>,
+    del: Option<PartialBlockTemplate>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct PartialBlockTemplate {
+    start: Option<String>,
+    end: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -320,15 +360,60 @@ impl AppConfig {
                     self.annotate.render.wrap_blank_lines = wrap_blank_lines;
                 }
             }
+            let mut has_new_add_template = false;
+            let mut has_new_modify_template = false;
+            let mut has_new_del_template = false;
+            if let Some(block_templates) = annotate.block_templates {
+                if let Some(add) = block_templates.add {
+                    has_new_add_template = true;
+                    if let Some(start) = add.start {
+                        self.annotate.block_templates.add.start = start;
+                    }
+                    if let Some(end) = add.end {
+                        self.annotate.block_templates.add.end = end;
+                    }
+                }
+                if let Some(modify) = block_templates.modify {
+                    has_new_modify_template = true;
+                    if let Some(start) = modify.start {
+                        self.annotate.block_templates.modify.start = start;
+                    }
+                    if let Some(end) = modify.end {
+                        self.annotate.block_templates.modify.end = end;
+                    }
+                }
+                if let Some(del) = block_templates.del {
+                    has_new_del_template = true;
+                    if let Some(start) = del.start {
+                        self.annotate.block_templates.del.start = start;
+                    }
+                    if let Some(end) = del.end {
+                        self.annotate.block_templates.del.end = end;
+                    }
+                }
+            }
             if let Some(policies) = annotate.policies {
-                if let Some(add) = policies.add {
-                    self.annotate.policies.add = add;
+                if !has_new_add_template {
+                    if let Some(add) = policies.add {
+                        self.annotate.block_templates.add.start =
+                            legacy_policy_to_start_template(&add);
+                        self.annotate.block_templates.add.end = compatibility_end_template("add");
+                    }
                 }
-                if let Some(modify) = policies.modify {
-                    self.annotate.policies.modify = modify;
+                if !has_new_modify_template {
+                    if let Some(modify) = policies.modify {
+                        self.annotate.block_templates.modify.start =
+                            legacy_policy_to_start_template(&modify);
+                        self.annotate.block_templates.modify.end =
+                            compatibility_end_template("modify");
+                    }
                 }
-                if let Some(del) = policies.del {
-                    self.annotate.policies.del = del;
+                if !has_new_del_template {
+                    if let Some(del) = policies.del {
+                        self.annotate.block_templates.del.start =
+                            legacy_policy_to_start_template(&del);
+                        self.annotate.block_templates.del.end = compatibility_end_template("del");
+                    }
                 }
             }
             if let Some(file_rules) = annotate.file_rules {
@@ -498,6 +583,7 @@ fn parse_env_partial(env_map: &HashMap<String, String>) -> Result<PartialAppConf
             form: None,
             reference_kinds: None,
             render: None,
+            block_templates: None,
             policies: None,
             file_rules: None,
         });
@@ -512,6 +598,27 @@ fn parse_bool_env(name: &str, value: &str) -> Result<bool> {
         "0" | "false" | "no" | "off" => Ok(false),
         _ => Err(anyhow!("invalid boolean env {}={}", name, value)),
     }
+}
+
+fn compatibility_end_template(kind: &str) -> String {
+    format!("// end {kind}")
+}
+
+fn legacy_policy_to_start_template(policy: &str) -> String {
+    if policy.is_empty() {
+        return "//".to_string();
+    }
+    policy
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                "//".to_string()
+            } else {
+                format!("// {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -584,5 +691,38 @@ wrap_blank_lines = false
         let cfg = merge_layers(Some(global), None, &env, "zh-CN").unwrap();
         assert!(cfg.annotate.render.align_with_code_indent);
         assert!(!cfg.annotate.render.wrap_blank_lines);
+    }
+
+    #[test]
+    fn legacy_policies_fallback_to_block_templates() {
+        let project = r#"
+[annotate.policies]
+add = "legacy add {author_tag}"
+"#;
+        let env = HashMap::new();
+        let cfg = merge_layers(None, Some(project), &env, "zh-CN").unwrap();
+
+        assert_eq!(
+            cfg.annotate.block_templates.add.start,
+            "// legacy add {author_tag}"
+        );
+        assert_eq!(cfg.annotate.block_templates.add.end, "// end add");
+    }
+
+    #[test]
+    fn block_templates_take_precedence_over_legacy_policies() {
+        let project = r#"
+[annotate.policies]
+add = "legacy add"
+
+[annotate.block_templates.add]
+start = "// custom add"
+end = "//@}"
+"#;
+        let env = HashMap::new();
+        let cfg = merge_layers(None, Some(project), &env, "zh-CN").unwrap();
+
+        assert_eq!(cfg.annotate.block_templates.add.start, "// custom add");
+        assert_eq!(cfg.annotate.block_templates.add.end, "//@}");
     }
 }

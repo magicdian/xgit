@@ -721,7 +721,7 @@ fn field_count(section: usize, _config: &AppConfig) -> usize {
         1 => 2,
         2 => 1,
         3 => 3,
-        4 => 9,
+        4 => 12,
         _ => 0,
     }
 }
@@ -800,18 +800,33 @@ fn field_lines(catalog: &Catalog, config: &AppConfig, section: usize) -> Vec<Str
             ),
             format!(
                 "{}: {}",
-                catalog.t("setup.field.annotate.policy_add"),
-                config.annotate.policies.add
+                catalog.t("setup.field.annotate.template_add_start"),
+                config.annotate.block_templates.add.start
             ),
             format!(
                 "{}: {}",
-                catalog.t("setup.field.annotate.policy_modify"),
-                config.annotate.policies.modify
+                catalog.t("setup.field.annotate.template_add_end"),
+                config.annotate.block_templates.add.end
             ),
             format!(
                 "{}: {}",
-                catalog.t("setup.field.annotate.policy_del"),
-                config.annotate.policies.del
+                catalog.t("setup.field.annotate.template_modify_start"),
+                config.annotate.block_templates.modify.start
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.template_modify_end"),
+                config.annotate.block_templates.modify.end
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.template_del_start"),
+                config.annotate.block_templates.del.start
+            ),
+            format!(
+                "{}: {}",
+                catalog.t("setup.field.annotate.template_del_end"),
+                config.annotate.block_templates.del.end
             ),
         ],
         _ => vec![],
@@ -902,9 +917,12 @@ fn get_text(config: &AppConfig, section: usize, field: usize) -> Option<String> 
         (3, 2) => Some(config.identity.email.clone().unwrap_or_default()),
         (4, 1) => Some(config.annotate.form.fields.join(",")),
         (4, 2) => Some(config.annotate.reference_kinds.join(",")),
-        (4, 6) => Some(config.annotate.policies.add.clone()),
-        (4, 7) => Some(config.annotate.policies.modify.clone()),
-        (4, 8) => Some(config.annotate.policies.del.clone()),
+        (4, 6) => Some(config.annotate.block_templates.add.start.clone()),
+        (4, 7) => Some(config.annotate.block_templates.add.end.clone()),
+        (4, 8) => Some(config.annotate.block_templates.modify.start.clone()),
+        (4, 9) => Some(config.annotate.block_templates.modify.end.clone()),
+        (4, 10) => Some(config.annotate.block_templates.del.start.clone()),
+        (4, 11) => Some(config.annotate.block_templates.del.end.clone()),
         _ => None,
     }
 }
@@ -921,9 +939,12 @@ fn apply_text(config: &mut AppConfig, section: usize, field: usize, value: Strin
         (4, 2) => {
             config.annotate.reference_kinds = split_csv(value);
         }
-        (4, 6) => config.annotate.policies.add = value,
-        (4, 7) => config.annotate.policies.modify = value,
-        (4, 8) => config.annotate.policies.del = value,
+        (4, 6) => config.annotate.block_templates.add.start = value,
+        (4, 7) => config.annotate.block_templates.add.end = value,
+        (4, 8) => config.annotate.block_templates.modify.start = value,
+        (4, 9) => config.annotate.block_templates.modify.end = value,
+        (4, 10) => config.annotate.block_templates.del.start = value,
+        (4, 11) => config.annotate.block_templates.del.end = value,
         _ => {}
     }
 }
@@ -1066,6 +1087,32 @@ mod tests {
 
         let raw = std::fs::read_to_string(&target_path).unwrap();
         assert!(raw.contains("lang = \"en-US\""));
+    }
+
+    #[test]
+    fn save_writes_block_template_model_for_annotate() {
+        let catalog = test_catalog();
+        let tmp = TempDir::new().unwrap();
+        let target_path = tmp.path().join("config.toml");
+        let mut config = AppConfig::default();
+        config.annotate.block_templates.add.start = "// custom add {@".to_string();
+        config.annotate.block_templates.add.end = "//@}".to_string();
+        let mut state = SetupState::default();
+
+        handle_key_code(
+            KeyCode::Char('s'),
+            &catalog,
+            &target_path,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
+
+        let raw = std::fs::read_to_string(&target_path).unwrap();
+        assert!(raw.contains("[annotate.block_templates.add]"));
+        assert!(raw.contains("start = \"// custom add {@\""));
+        assert!(raw.contains("end = \"//@}\""));
+        assert!(!raw.contains("[annotate.policies]"));
     }
 
     #[test]
