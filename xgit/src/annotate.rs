@@ -1,7 +1,8 @@
 use crate::code_file_types::builtin_entry_for_path;
 use crate::config::{
-    AnnotateOldCodeBlockCommentConfig, AnnotateOldCodeLineCommentConfig, AnnotateOldCodeLineLayout,
-    AnnotateOldCodeMode, AppConfig, FileRuleConfig,
+    default_block_template, AnnotateFormFieldKind, AnnotateOldCodeBlockCommentConfig,
+    AnnotateOldCodeLineCommentConfig, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig,
+    FileRuleConfig,
 };
 use crate::i18n::Catalog;
 use anyhow::{anyhow, bail, Context, Result};
@@ -50,11 +51,19 @@ struct FileChange {
 
 #[derive(Debug, Clone)]
 struct RuntimeContext {
-    reason: String,
-    reference_kind: String,
-    reference_value: String,
+    values: BTreeMap<String, String>,
     author_tag: String,
     date: String,
+}
+
+impl RuntimeContext {
+    fn new(values: BTreeMap<String, String>, author_tag: String, date: String) -> Self {
+        Self {
+            values,
+            author_tag,
+            date,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +87,7 @@ enum UnformattedReason {
     BuiltinTypeDisabled,
     RendererUnimplemented(String),
     NoTargetContent,
+    DeleteRequiresDelTemplateAndOldCode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,11 +191,31 @@ pub fn run(
             &repo_root,
         )? {
             CandidateProcessResult::Prepared {
-                file,
+                mut file,
                 context_candidates: file_context_candidates,
             } => {
-                context_candidates.extend(file_context_candidates);
-                prepared.push(file);
+                let mut renderable_segments = Vec::with_capacity(file.segments.len());
+                let mut has_unformatted_delete = false;
+                for segment in file.segments.drain(..) {
+                    match decide_segment_render(&segment, config) {
+                        SegmentRenderDecision::Render { .. } => renderable_segments.push(segment),
+                        SegmentRenderDecision::Skip => {}
+                        SegmentRenderDecision::SkipAsUnformatted(reason) => {
+                            if !has_unformatted_delete {
+                                unformatted.push(UnformattedFile {
+                                    path: file.change.path.clone(),
+                                    reason,
+                                });
+                                has_unformatted_delete = true;
+                            }
+                        }
+                    }
+                }
+                if !renderable_segments.is_empty() {
+                    file.segments = renderable_segments;
+                    context_candidates.extend(file_context_candidates);
+                    prepared.push(file);
+                }
             }
             CandidateProcessResult::Unformatted(item) => {
                 unformatted.push(item);
@@ -193,20 +223,27 @@ pub fn run(
         }
     }
 
-    let reuse_defaults = resolve_reusable_context_defaults(&context_candidates);
-    let context = collect_runtime_context(
-        &options,
-        config,
-        catalog,
-        &repo_root,
-        reuse_defaults.as_ref(),
-    )?;
+    let context = if prepared.is_empty() {
+        None
+    } else {
+        let reuse_defaults = resolve_reusable_context_defaults(&context_candidates);
+        Some(collect_runtime_context(
+            &options,
+            config,
+            catalog,
+            &repo_root,
+            reuse_defaults.as_ref(),
+        )?)
+    };
 
     let mut applied = 0usize;
     for file in &prepared {
         if file.segments.is_empty() {
             continue;
         }
+        let Some(context) = context.as_ref() else {
+            continue;
+        };
         let updated = apply_c_line_segments(
             &file.logical_content,
             &file.segments,
@@ -314,6 +351,55 @@ fn format_unformatted_reason(reason: &UnformattedReason, catalog: &Catalog) -> S
         UnformattedReason::NoTargetContent => {
             catalog.t("status.annotate.unformatted_reason.no_target_content")
         }
+        UnformattedReason::DeleteRequiresDelTemplateAndOldCode => catalog.t(
+            "status.annotate.unformatted_reason.delete_requires_del_template_and_old_code",
+        ),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SegmentRenderDecision {
+    Render { suppress_old_code: bool },
+    Skip,
+    SkipAsUnformatted(UnformattedReason),
+}
+
+fn old_code_processing_enabled_for_render(config: &AppConfig) -> bool {
+    config.annotate.old_code.enabled
+        && config.annotate.old_code.mode != Some(AnnotateOldCodeMode::None)
+}
+
+fn decide_segment_render(segment: &HunkSegment, config: &AppConfig) -> SegmentRenderDecision {
+    match segment.kind {
+        ChangeKind::Add => SegmentRenderDecision::Render {
+            suppress_old_code: false,
+        },
+        ChangeKind::Modify => {
+            if !config.annotate.block_templates.modify.enabled {
+                SegmentRenderDecision::Skip
+            } else if old_code_processing_enabled_for_render(config) {
+                SegmentRenderDecision::Render {
+                    suppress_old_code: false,
+                }
+            } else {
+                SegmentRenderDecision::Render {
+                    suppress_old_code: true,
+                }
+            }
+        }
+        ChangeKind::Delete => {
+            if config.annotate.block_templates.del.enabled
+                && old_code_processing_enabled_for_render(config)
+            {
+                SegmentRenderDecision::Render {
+                    suppress_old_code: false,
+                }
+            } else {
+                SegmentRenderDecision::SkipAsUnformatted(
+                    UnformattedReason::DeleteRequiresDelTemplateAndOldCode,
+                )
+            }
+        }
     }
 }
 
@@ -357,18 +443,30 @@ fn collect_runtime_context(
     cwd: &Path,
     reuse_defaults: Option<&PendingBlockContextDefaults>,
 ) -> Result<RuntimeContext> {
-    let fields = &config.annotate.form.fields;
-    let mut reason = options.reason.clone().unwrap_or_default();
-    let mut reference_kind = options.reference_kind.clone().unwrap_or_default();
-    let mut reference_value = options.reference_value.clone().unwrap_or_default();
+    let mut values = BTreeMap::<String, String>::new();
+    if let Some(reason) = options.reason.clone() {
+        values.insert("reason".to_string(), reason);
+    }
+    if let Some(reference_kind) = options.reference_kind.clone() {
+        values.insert("reference_kind".to_string(), reference_kind);
+    }
+    if let Some(reference_value) = options.reference_value.clone() {
+        values.insert("reference_value".to_string(), reference_value);
+    }
     let mut reused_context = false;
 
-    let should_try_reuse = reason.is_empty()
-        && reference_kind.is_empty()
-        && reference_value.is_empty()
-        && fields.iter().any(|field| {
-            field == "reason" || field == "reference_kind" || field == "reference_value"
-        });
+    let should_try_reuse = values.get("reason").map(|v| v.is_empty()).unwrap_or(true)
+        && values
+            .get("reference_kind")
+            .map(|v| v.is_empty())
+            .unwrap_or(true)
+        && values
+            .get("reference_value")
+            .map(|v| v.is_empty())
+            .unwrap_or(true)
+        && (config.annotate.form.uses_field("reason")
+            || config.annotate.form.uses_field("reference_kind")
+            || config.annotate.form.uses_field("reference_value"));
     if should_try_reuse {
         if let Some(defaults) = reuse_defaults {
             let prompt = catalog.tf(
@@ -380,89 +478,89 @@ fn collect_runtime_context(
                 ],
             );
             if prompt_yes_no(&prompt, true)? {
-                reason = defaults.reason.clone();
-                reference_kind = defaults.reference_kind.clone();
-                reference_value = defaults.reference_value.clone();
+                values.insert("reason".to_string(), defaults.reason.clone());
+                values.insert("reference_kind".to_string(), defaults.reference_kind.clone());
+                values.insert("reference_value".to_string(), defaults.reference_value.clone());
                 reused_context = true;
             }
         }
     }
 
-    if reason.is_empty() && fields.iter().any(|f| f == "reason") {
-        reason = prompt_line(&catalog.t("prompt.annotate.reason"))?;
-    }
-
-    if reference_kind.is_empty() && fields.iter().any(|f| f == "reference_kind") {
-        let prompt = format!(
-            "{} [{}]",
-            catalog.t("prompt.annotate.reference_kind"),
-            config.annotate.reference_kinds.join(",")
-        );
-        reference_kind = prompt_line(&prompt)?;
-    }
-    if reference_kind.is_empty() && !config.annotate.reference_kinds.is_empty() {
-        reference_kind = config.annotate.reference_kinds[0].clone();
-    }
-
-    if !config.annotate.reference_kinds.is_empty()
-        && !config
-            .annotate
-            .reference_kinds
-            .iter()
-            .any(|k| k == &reference_kind)
-    {
-        if reused_context {
-            reference_kind.clear();
-        } else {
-            bail!(
-                "{}",
-                catalog.tf(
-                    "error.annotate.reference_kind_invalid",
-                    &[("kind", reference_kind.clone())]
-                )
-            );
+    for field in &config.annotate.form.fields {
+        let current = values.get(field.id.as_str()).cloned().unwrap_or_default();
+        if !current.is_empty() {
+            continue;
+        }
+        let entered = prompt_line(&field_prompt(catalog, config, field))?;
+        if !entered.is_empty() {
+            values.insert(field.id.clone(), entered);
         }
     }
 
-    if reference_kind.is_empty() && fields.iter().any(|f| f == "reference_kind") {
-        let prompt = format!(
-            "{} [{}]",
-            catalog.t("prompt.annotate.reference_kind"),
-            config.annotate.reference_kinds.join(",")
-        );
-        reference_kind = prompt_line(&prompt)?;
-    }
-    if reference_kind.is_empty() && !config.annotate.reference_kinds.is_empty() {
-        reference_kind = config.annotate.reference_kinds[0].clone();
+    for field in &config.annotate.form.fields {
+        let current = values.get(field.id.as_str()).cloned().unwrap_or_default();
+        if field.required && current.trim().is_empty() {
+            bail!(
+                "{}",
+                catalog.tf(
+                    "error.annotate.required_field_missing",
+                    &[("field", field_display_label(field))]
+                )
+            );
+        }
+
+        if field.kind == AnnotateFormFieldKind::SingleSelect {
+            if let Some(option_set) = field.option_set.as_deref() {
+                let candidates = config.annotate.form.option_values(option_set);
+                let mut candidate_value = current.clone();
+                if !candidate_value.is_empty()
+                    && !candidates.is_empty()
+                    && !candidates.iter().any(|candidate| candidate == &candidate_value)
+                {
+                    if reused_context && field.id == "reference_kind" {
+                        let retry = prompt_line(&field_prompt(catalog, config, field))?;
+                        if retry.trim().is_empty() {
+                            bail!(
+                                "{}",
+                                catalog.tf(
+                                    "error.annotate.required_field_missing",
+                                    &[("field", field_display_label(field))]
+                                )
+                            );
+                        }
+                        values.insert(field.id.clone(), retry.clone());
+                        candidate_value = retry;
+                    } else {
+                        bail!(
+                            "{}",
+                            catalog.tf(
+                                "error.annotate.reference_kind_invalid",
+                                &[("kind", current.clone())]
+                            )
+                        );
+                    }
+                }
+                if !candidate_value.is_empty()
+                    && !candidates.is_empty()
+                    && !candidates.iter().any(|candidate| candidate == &candidate_value)
+                {
+                    bail!(
+                        "{}",
+                        catalog.tf(
+                            "error.annotate.reference_kind_invalid",
+                            &[("kind", candidate_value)]
+                        )
+                    );
+                }
+            }
+        }
     }
 
-    if !config.annotate.reference_kinds.is_empty()
-        && !config
-            .annotate
-            .reference_kinds
-            .iter()
-            .any(|k| k == &reference_kind)
-    {
-        bail!(
-            "{}",
-            catalog.tf(
-                "error.annotate.reference_kind_invalid",
-                &[("kind", reference_kind.clone())]
-            )
-        );
-    }
-
-    if reference_value.is_empty() && fields.iter().any(|f| f == "reference_value") {
-        reference_value = prompt_line(&catalog.t("prompt.annotate.reference_value"))?;
-    }
-
-    Ok(RuntimeContext {
-        reason,
-        reference_kind,
-        reference_value,
-        author_tag: resolve_author_tag(cwd, config),
-        date: current_date_tag(&config.annotate.date.format),
-    })
+    Ok(RuntimeContext::new(
+        values,
+        resolve_author_tag(cwd, config),
+        current_date_tag(&config.annotate.date.format),
+    ))
 }
 
 fn resolve_author_tag(cwd: &Path, config: &AppConfig) -> String {
@@ -500,6 +598,46 @@ fn to_chrono_date_format(format: &str) -> String {
         .replace("dd", "%d")
         .replace("HH", "%H")
         .replace("MM", "%M")
+}
+
+fn field_prompt(
+    catalog: &Catalog,
+    config: &AppConfig,
+    field: &crate::config::AnnotateFormFieldConfig,
+) -> String {
+    match field.id.as_str() {
+        "reason" => catalog.t("prompt.annotate.reason"),
+        "reference_kind" => format!(
+            "{} [{}]",
+            catalog.t("prompt.annotate.reference_kind"),
+            config.annotate.reference_kind_values().join(",")
+        ),
+        "reference_value" => catalog.t("prompt.annotate.reference_value"),
+        _ => {
+            if field.kind == AnnotateFormFieldKind::SingleSelect {
+                let options = field
+                    .option_set
+                    .as_deref()
+                    .map(|name| config.annotate.form.option_values(name).join(","))
+                    .unwrap_or_default();
+                if options.is_empty() {
+                    format!("Enter {}", field_display_label(field))
+                } else {
+                    format!("Enter {} [{}]", field_display_label(field), options)
+                }
+            } else {
+                format!("Enter {}", field_display_label(field))
+            }
+        }
+    }
+}
+
+fn field_display_label(field: &crate::config::AnnotateFormFieldConfig) -> String {
+    if field.label.trim().is_empty() {
+        field.id.clone()
+    } else {
+        field.label.clone()
+    }
 }
 
 fn prompt_line(prompt: &str) -> Result<String> {
@@ -672,18 +810,13 @@ fn normalize_content_before_render(
 
 fn build_block_patterns(config: &AppConfig) -> Result<Vec<BlockPattern>> {
     let mut patterns = Vec::new();
-    for (kind, template) in [
-        (ChangeKind::Add, &config.annotate.block_templates.add),
-        (ChangeKind::Modify, &config.annotate.block_templates.modify),
-        (ChangeKind::Delete, &config.annotate.block_templates.del),
-    ] {
-        let start_lines = template
-            .start
+    for kind in [ChangeKind::Add, ChangeKind::Modify, ChangeKind::Delete] {
+        let (start_template, end_template) = active_block_template(kind.clone(), config);
+        let start_lines = start_template
             .lines()
             .map(build_pattern_line)
             .collect::<Result<Vec<_>>>()?;
-        let end_lines = template
-            .end
+        let end_lines = end_template
             .lines()
             .map(build_pattern_line)
             .collect::<Result<Vec<_>>>()?;
@@ -692,7 +825,7 @@ fn build_block_patterns(config: &AppConfig) -> Result<Vec<BlockPattern>> {
         }
         patterns.push(BlockPattern {
             kind,
-            start_contains_old_placeholder: template.start.contains("{old}"),
+            start_contains_old_placeholder: start_template.contains("{old}"),
             start_lines,
             end_lines,
         });
@@ -812,7 +945,7 @@ fn find_candidate_blocks(
         }
         matches.sort_by_key(|(pattern, _, _)| std::cmp::Reverse(pattern.start_lines.len()));
         let (pattern, indent, mut context_candidate) = matches.remove(0);
-        normalize_context_candidate(&mut context_candidate, &config.annotate.reference_kinds);
+        normalize_context_candidate(&mut context_candidate, config.annotate.reference_kind_values());
         let start_len = pattern.start_lines.len();
         let search_start = line_idx + start_len;
         let Some(end_start) = find_matching_end(lines, search_start, pattern, &indent) else {
@@ -969,6 +1102,9 @@ fn parse_old_region_len(
     start_line: usize,
 ) -> Result<usize> {
     if *kind == ChangeKind::Add {
+        return Ok(0);
+    }
+    if !config.annotate.old_code.enabled {
         return Ok(0);
     }
     match &config.annotate.old_code.mode {
@@ -1531,12 +1667,22 @@ fn apply_c_line_segments(
         .collect::<Vec<_>>();
 
     for segment in segments.iter().rev() {
+        let suppress_old_code = match decide_segment_render(segment, config) {
+            SegmentRenderDecision::Render { suppress_old_code } => suppress_old_code,
+            SegmentRenderDecision::Skip | SegmentRenderDecision::SkipAsUnformatted(_) => continue,
+        };
         let Some(window) = segment_render_window(segment, config) else {
             continue;
         };
 
-        let (prefix, suffix) =
-            render_c_line_block(segment, context, config, path, window.code_lines_range);
+        let (prefix, suffix) = render_c_line_block(
+            segment,
+            context,
+            config,
+            path,
+            window.code_lines_range,
+            suppress_old_code,
+        );
         let base_index = segment.start_line.saturating_sub(1).min(lines.len());
         let insert_index = (base_index + window.insert_offset).min(lines.len());
         lines.splice(insert_index..insert_index, prefix.clone());
@@ -1566,26 +1712,18 @@ fn render_c_line_block(
     config: &AppConfig,
     path: &str,
     code_lines_range: Option<(usize, usize)>,
+    suppress_old_code: bool,
 ) -> (Vec<String>, Vec<String>) {
     let explicit_old_code_mode = config.annotate.old_code.mode.clone();
-    let old_value_override = explicit_old_code_mode.as_ref().map(|_| "");
-
-    let (start_template, end_template) = match segment.kind {
-        ChangeKind::Add => (
-            &config.annotate.block_templates.add.start,
-            &config.annotate.block_templates.add.end,
-        ),
-        ChangeKind::Modify => (
-            &config.annotate.block_templates.modify.start,
-            &config.annotate.block_templates.modify.end,
-        ),
-        ChangeKind::Delete => (
-            &config.annotate.block_templates.del.start,
-            &config.annotate.block_templates.del.end,
-        ),
+    let old_value_override = if suppress_old_code {
+        Some("")
+    } else {
+        explicit_old_code_mode.as_ref().map(|_| "")
     };
-    let rendered_start = expand_policy_template(
-        start_template,
+
+    let (start_template, end_template) = active_block_template(segment.kind.clone(), config);
+    let mut rendered_start = expand_policy_template(
+        start_template.as_str(),
         context,
         segment.kind.key(),
         path,
@@ -1593,8 +1731,8 @@ fn render_c_line_block(
         &segment.old_lines,
         &segment.new_lines,
     );
-    let rendered_end = expand_policy_template(
-        end_template,
+    let mut rendered_end = expand_policy_template(
+        end_template.as_str(),
         context,
         segment.kind.key(),
         path,
@@ -1602,13 +1740,18 @@ fn render_c_line_block(
         &segment.old_lines,
         &segment.new_lines,
     );
+    if suppress_old_code {
+        rendered_start = strip_old_placeholder_residue(&rendered_start);
+        rendered_end = strip_old_placeholder_residue(&rendered_end);
+    }
 
     let comment_indent = resolve_comment_indent(segment, config, code_lines_range);
     let mut prefix = rendered_start
         .lines()
         .map(|line| format!("{}{}", comment_indent, line))
         .collect::<Vec<_>>();
-    if segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete {
+    if !suppress_old_code && (segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete)
+    {
         match explicit_old_code_mode {
             Some(AnnotateOldCodeMode::None) => {}
             Some(AnnotateOldCodeMode::LineComment) => {
@@ -1641,6 +1784,37 @@ fn render_c_line_block(
         .map(|line| format!("{}{}", comment_indent, line))
         .collect::<Vec<_>>();
     (prefix, suffix)
+}
+
+fn strip_old_placeholder_residue(rendered: &str) -> String {
+    rendered
+        .lines()
+        .map(strip_old_placeholder_residue_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn strip_old_placeholder_residue_line(line: &str) -> String {
+    let mut cleaned = line.replace("old=", "");
+    while cleaned.contains("  ") {
+        cleaned = cleaned.replace("  ", " ");
+    }
+    cleaned.trim_end().to_string()
+}
+
+fn active_block_template(kind: ChangeKind, config: &AppConfig) -> (String, String) {
+    let (kind_key, template) = match kind {
+        ChangeKind::Add => ("add", &config.annotate.block_templates.add),
+        ChangeKind::Modify => ("modify", &config.annotate.block_templates.modify),
+        ChangeKind::Delete => ("del", &config.annotate.block_templates.del),
+    };
+
+    if template.enabled {
+        (template.start.clone(), template.end.clone())
+    } else {
+        let default_template = default_block_template(kind_key);
+        (default_template.start, default_template.end)
+    }
 }
 
 fn c_line_comment(content: &str, indent: &str) -> String {
@@ -1787,12 +1961,13 @@ fn expand_policy_template(
         .unwrap_or_else(|| old_lines.join("\\n"));
     let new = new_lines.join("\\n");
     let mut rendered = template.to_string();
+    for (field, value) in &context.values {
+        let key = format!("{{{field}}}");
+        rendered = rendered.replace(key.as_str(), value);
+    }
     for (key, value) in [
         ("{author_tag}", context.author_tag.as_str()),
         ("{date}", context.date.as_str()),
-        ("{reason}", context.reason.as_str()),
-        ("{reference_kind}", context.reference_kind.as_str()),
-        ("{reference_value}", context.reference_value.as_str()),
         ("{kind}", kind),
         ("{path}", path),
         ("{old}", old.as_str()),
@@ -1852,10 +2027,11 @@ fn matches_pattern(path: &str, pattern: &str) -> bool {
 mod tests {
     use super::{
         apply_c_line_segments, build_annotate_report_lines, classify_missing_rule_reason,
-        collect_latest_commit_changes, collect_runtime_context, collect_staged_changes, git_stdout,
-        load_baseline_content, matches_pattern, normalize_content_before_render,
-        parse_hunk_segments, parse_name_status_output, resolve_reusable_context_defaults, run,
-        select_renderer, ChangeKind, ContextReuseCandidate, FileChange, HunkSegment, RuntimeContext,
+        collect_latest_commit_changes, collect_runtime_context, collect_staged_changes,
+        decide_segment_render, git_stdout, load_baseline_content, matches_pattern,
+        normalize_content_before_render, parse_hunk_segments, parse_name_status_output,
+        resolve_reusable_context_defaults, run, select_renderer, ChangeKind,
+        ContextReuseCandidate, FileChange, HunkSegment, RuntimeContext, SegmentRenderDecision,
         UnformattedFile, UnformattedReason,
     };
     use crate::code_file_types::{default_selected_keys, file_rules_from_selection};
@@ -1864,11 +2040,25 @@ mod tests {
         LoadConfigOptions,
     };
     use chrono::NaiveDateTime;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::fs;
     use std::path::Path;
     use std::process::Command;
     use tempfile::TempDir;
+
+    fn test_runtime_context(
+        reason: &str,
+        reference_kind: &str,
+        reference_value: &str,
+        author_tag: &str,
+        date: &str,
+    ) -> RuntimeContext {
+        let mut values = BTreeMap::new();
+        values.insert("reason".to_string(), reason.to_string());
+        values.insert("reference_kind".to_string(), reference_kind.to_string());
+        values.insert("reference_value".to_string(), reference_value.to_string());
+        RuntimeContext::new(values, author_tag.to_string(), date.to_string())
+    }
 
     #[test]
     fn parse_name_status() {
@@ -1973,12 +2163,17 @@ index a1b2c3d..e4f5a6b 100644
                         "proto_line_block".to_string(),
                     ),
                 },
+                UnformattedFile {
+                    path: "src/delete-only.c".to_string(),
+                    reason: UnformattedReason::DeleteRequiresDelTemplateAndOldCode,
+                },
             ],
         );
         let output = lines.join("\n");
         assert!(output.contains("未格式化：build/Android.bp (不支持该类型)"));
         assert!(output.contains("未格式化：src/demo.cpp (设置未开启该后缀功能)"));
         assert!(output.contains("命中了尚未实现的渲染器 'proto_line_block'"));
+        assert!(output.contains("删除格式依赖“删除模板”和“旧代码处理”同时开启"));
     }
 
     #[test]
@@ -1992,6 +2187,7 @@ index a1b2c3d..e4f5a6b 100644
     #[test]
     fn apply_segments_wraps_changed_lines() {
         let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start =
             "// add {author_tag}:{reason}:{reference_kind}:{reference_value}".to_string();
         cfg.annotate.block_templates.add.end = "// end add".to_string();
@@ -2004,13 +2200,7 @@ index a1b2c3d..e4f5a6b 100644
                 old_lines: vec![],
                 new_lines: vec!["int b = 2;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "123".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "123"),
             &cfg,
             "demo.c",
         );
@@ -2021,6 +2211,7 @@ index a1b2c3d..e4f5a6b 100644
     #[test]
     fn apply_segments_honors_custom_end_template() {
         let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start = "// add block {@".to_string();
         cfg.annotate.block_templates.add.end = "//@}".to_string();
         let content = "int a = 1;\n";
@@ -2032,13 +2223,7 @@ index a1b2c3d..e4f5a6b 100644
                 old_lines: vec![],
                 new_lines: vec!["int a = 1;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "123".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "123"),
             &cfg,
             "demo.c",
         );
@@ -2064,13 +2249,7 @@ add = "legacy {author_tag}:{reason}"
                 old_lines: vec![],
                 new_lines: vec!["int a = 1;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "123".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "123"),
             &cfg,
             "demo.c",
         );
@@ -2096,13 +2275,7 @@ end = "//@}"
                 old_lines: vec![],
                 new_lines: vec!["int a = 1;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "123".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "123"),
             &cfg,
             "demo.c",
         );
@@ -2115,6 +2288,7 @@ end = "//@}"
     fn apply_segments_aligns_with_code_indent_when_enabled() {
         let mut cfg = AppConfig::default();
         cfg.annotate.render.align_with_code_indent = true;
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start = "// aligned".to_string();
         cfg.annotate.block_templates.add.end = "// end add".to_string();
         let content = "    int value = 42;\n";
@@ -2127,13 +2301,7 @@ end = "//@}"
                 old_lines: vec![],
                 new_lines: vec!["    int value = 42;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "123".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "123"),
             &cfg,
             "demo.c",
         );
@@ -2145,6 +2313,7 @@ end = "//@}"
     #[test]
     fn apply_segments_wrap_blank_lines_option_controls_comment_boundary() {
         let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start = "// boundary".to_string();
         cfg.annotate.block_templates.add.end = "// end add".to_string();
         let segment = HunkSegment {
@@ -2157,13 +2326,7 @@ end = "//@}"
                 "".to_string(),
             ],
         };
-        let context = RuntimeContext {
-            reason: "why".to_string(),
-            reference_kind: "bug".to_string(),
-            reference_value: "ID-1".to_string(),
-            author_tag: "QA".to_string(),
-            date: "123".to_string(),
-        };
+        let context = test_runtime_context("why", "bug", "ID-1", "QA", "123");
         let content = "\n    int value = 42;\n\n";
 
         cfg.annotate.render.wrap_blank_lines = true;
@@ -2215,13 +2378,7 @@ end = "//@}"
                 old_lines: vec!["int a = 1;".to_string()],
                 new_lines: vec!["int a = 2;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "2026-04-01".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
             &cfg,
             "demo.c",
         );
@@ -2231,12 +2388,127 @@ end = "//@}"
     }
 
     #[test]
+    fn modify_enabled_with_old_processing_disabled_keeps_modify_without_old_residue() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
+        cfg.annotate.block_templates.modify.enabled = true;
+        cfg.annotate.block_templates.modify.start = "// modify old={old}".to_string();
+        cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+
+        let content = "int a = 2;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Modify,
+                old_lines: vec!["int a = 1;".to_string()],
+                new_lines: vec!["int a = 2;".to_string()],
+            }],
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("// modify"));
+        assert!(updated.contains("// end modify"));
+        assert!(!updated.contains("old="));
+        assert!(!updated.contains("// old:"));
+        assert!(!updated.contains("int a = 1;"));
+    }
+
+    #[test]
+    fn modify_disabled_with_old_processing_enabled_does_not_render_modify_block() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::LineComment);
+        cfg.annotate.block_templates.modify.enabled = false;
+
+        let content = "int a = 2;\n";
+        let updated = apply_c_line_segments(
+            content,
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Modify,
+                old_lines: vec!["int a = 1;".to_string()],
+                new_lines: vec!["int a = 2;".to_string()],
+            }],
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
+            &cfg,
+            "demo.c",
+        );
+
+        assert_eq!(updated, content);
+        assert!(!updated.contains("// modify"));
+        assert!(!updated.contains("// old:"));
+    }
+
+    #[test]
+    fn delete_enabled_with_old_processing_disabled_is_skipped_with_unformatted_reason() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
+        cfg.annotate.block_templates.del.enabled = true;
+        cfg.annotate.block_templates.del.start = "// del".to_string();
+        cfg.annotate.block_templates.del.end = "// end del".to_string();
+
+        let segment = HunkSegment {
+            start_line: 1,
+            kind: ChangeKind::Delete,
+            old_lines: vec!["int a = 1;".to_string()],
+            new_lines: vec![],
+        };
+        let updated = apply_c_line_segments(
+            "",
+            &[segment.clone()],
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
+            &cfg,
+            "demo.c",
+        );
+
+        assert_eq!(updated, "");
+        assert_eq!(
+            decide_segment_render(&segment, &cfg),
+            SegmentRenderDecision::SkipAsUnformatted(
+                UnformattedReason::DeleteRequiresDelTemplateAndOldCode
+            )
+        );
+    }
+
+    #[test]
+    fn delete_enabled_with_old_processing_enabled_renders_delete_block() {
+        let mut cfg = AppConfig::default();
+        cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::LineComment);
+        cfg.annotate.old_code.line_comment.layout = AnnotateOldCodeLineLayout::PerLine;
+        cfg.annotate.old_code.line_comment.body_prefix = "old: ".to_string();
+        cfg.annotate.old_code.line_comment.body_suffix = String::new();
+        cfg.annotate.block_templates.del.enabled = true;
+        cfg.annotate.block_templates.del.start = "// del".to_string();
+        cfg.annotate.block_templates.del.end = "// end del".to_string();
+
+        let updated = apply_c_line_segments(
+            "",
+            &[HunkSegment {
+                start_line: 1,
+                kind: ChangeKind::Delete,
+                old_lines: vec!["int a = 1;".to_string()],
+                new_lines: vec![],
+            }],
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
+            &cfg,
+            "demo.c",
+        );
+
+        assert!(updated.contains("// del"));
+        assert!(updated.contains("// old: int a = 1;"));
+        assert!(updated.contains("// end del"));
+    }
+
+    #[test]
     fn explicit_old_code_line_comment_per_line_renders_each_old_line() {
         let mut cfg = AppConfig::default();
         cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::LineComment);
         cfg.annotate.old_code.line_comment.layout = AnnotateOldCodeLineLayout::PerLine;
         cfg.annotate.old_code.line_comment.body_prefix = "old: ".to_string();
         cfg.annotate.old_code.line_comment.body_suffix = "".to_string();
+        cfg.annotate.block_templates.modify.enabled = true;
         cfg.annotate.block_templates.modify.start = "// modify".to_string();
         cfg.annotate.block_templates.modify.end = "// end modify".to_string();
 
@@ -2249,13 +2521,7 @@ end = "//@}"
                 old_lines: vec!["int a = 1;".to_string(), "int b = 2;".to_string()],
                 new_lines: vec!["int a = 2;".to_string(), "int b = 3;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "2026-04-01".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
             &cfg,
             "demo.c",
         );
@@ -2272,6 +2538,7 @@ end = "//@}"
         cfg.annotate.old_code.line_comment.header = "legacy old".to_string();
         cfg.annotate.old_code.line_comment.body_prefix = ">> ".to_string();
         cfg.annotate.old_code.line_comment.body_suffix = String::new();
+        cfg.annotate.block_templates.modify.enabled = true;
         cfg.annotate.block_templates.modify.start = "// modify".to_string();
         cfg.annotate.block_templates.modify.end = "// end modify".to_string();
 
@@ -2284,13 +2551,7 @@ end = "//@}"
                 old_lines: vec!["int a = 1;".to_string()],
                 new_lines: vec!["int a = 2;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "2026-04-01".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
             &cfg,
             "demo.c",
         );
@@ -2305,6 +2566,7 @@ end = "//@}"
         cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::BlockComment);
         cfg.annotate.old_code.block_comment.title = "cover old codes".to_string();
         cfg.annotate.old_code.block_comment.body_prefix = "| ".to_string();
+        cfg.annotate.block_templates.modify.enabled = true;
         cfg.annotate.block_templates.modify.start = "// modify".to_string();
         cfg.annotate.block_templates.modify.end = "// end modify".to_string();
 
@@ -2317,13 +2579,7 @@ end = "//@}"
                 old_lines: vec!["int a = 1;".to_string()],
                 new_lines: vec!["int a = 2;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "2026-04-01".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
             &cfg,
             "demo.c",
         );
@@ -2337,6 +2593,7 @@ end = "//@}"
     fn legacy_old_code_fallback_kept_when_mode_is_unset() {
         let mut cfg = AppConfig::default();
         cfg.annotate.old_code.mode = None;
+        cfg.annotate.block_templates.modify.enabled = true;
         cfg.annotate.block_templates.modify.start = "// modify".to_string();
         cfg.annotate.block_templates.modify.end = "// end modify".to_string();
 
@@ -2349,13 +2606,7 @@ end = "//@}"
                 old_lines: vec!["int a = 1;".to_string()],
                 new_lines: vec!["int a = 2;".to_string()],
             }],
-            &RuntimeContext {
-                reason: "why".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "2026-04-01".to_string(),
-            },
+            &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
             &cfg,
             "demo.c",
         );
@@ -2382,9 +2633,22 @@ end = "//@}"
             None,
         )
         .unwrap();
-        assert_eq!(ctx.reason, "reason");
-        assert_eq!(ctx.reference_kind, "bug");
-        assert_eq!(ctx.reference_value, "ID-1");
+        assert_eq!(
+            ctx.values.get("reason").map(std::string::String::as_str),
+            Some("reason")
+        );
+        assert_eq!(
+            ctx.values
+                .get("reference_kind")
+                .map(std::string::String::as_str),
+            Some("bug")
+        );
+        assert_eq!(
+            ctx.values
+                .get("reference_value")
+                .map(std::string::String::as_str),
+            Some("ID-1")
+        );
     }
 
     #[test]
@@ -2480,6 +2744,7 @@ end = "//@}"
 
         let project_cfg = r#"
 [annotate.block_templates.modify]
+enabled = true
 start = "// repo-template {reason}"
 end = "// repo-end"
 "#;
@@ -2487,6 +2752,8 @@ end = "// repo-end"
         fs::write(repo.path().join(".xgit").join("runtime.state"), "dirty\n").unwrap();
 
         let runtime = load_runtime_config(repo.path(), &LoadConfigOptions).unwrap();
+        let mut effective = runtime.effective;
+        effective.annotate.form = AppConfig::default().annotate.form;
         let catalog = crate::i18n::load_catalog("en-US", repo.path()).unwrap();
         run(
             super::AnnotateOptions {
@@ -2496,7 +2763,7 @@ end = "// repo-end"
                 reference_kind: Some("bug".to_string()),
                 reference_value: Some("ID-9".to_string()),
             },
-            &runtime.effective,
+            &effective,
             &catalog,
             repo.path(),
         )
@@ -2520,6 +2787,7 @@ end = "// repo-end"
         let catalog = crate::i18n::load_catalog("en-US", repo.path()).unwrap();
         let mut cfg = AppConfig::default();
         cfg.identity.author_tag = Some("QA".to_string());
+        cfg.annotate.block_templates.modify.enabled = true;
 
         run(
             super::AnnotateOptions {
@@ -2558,6 +2826,7 @@ end = "// repo-end"
         let catalog = crate::i18n::load_catalog("en-US", repo.path()).unwrap();
         let mut cfg = AppConfig::default();
         cfg.identity.author_tag = Some("QA".to_string());
+        cfg.annotate.block_templates.modify.enabled = true;
 
         run(
             super::AnnotateOptions {
@@ -2594,6 +2863,7 @@ end = "// repo-end"
         let catalog = crate::i18n::load_catalog("en-US", &sub).unwrap();
         let mut cfg = AppConfig::default();
         cfg.identity.author_tag = Some("QA".to_string());
+        cfg.annotate.block_templates.modify.enabled = true;
 
         run(
             super::AnnotateOptions {
@@ -2616,10 +2886,13 @@ end = "// repo-end"
     #[test]
     fn pending_add_blocks_rebuild_to_single_add_wrapper() {
         let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
         cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.block_templates.modify.enabled = true;
         cfg.annotate.block_templates.modify.start = "// modify {reason}".to_string();
         cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+        cfg.annotate.block_templates.del.enabled = true;
         cfg.annotate.block_templates.del.start = "// del {reason}".to_string();
         cfg.annotate.block_templates.del.end = "// end del".to_string();
         cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
@@ -2636,13 +2909,7 @@ end = "// repo-end"
         let rendered = apply_c_line_segments(
             &normalized.logical_content,
             &normalized.segments,
-            &RuntimeContext {
-                reason: "final".to_string(),
-                reference_kind: "bug".to_string(),
-                reference_value: "ID-1".to_string(),
-                author_tag: "QA".to_string(),
-                date: "2026-04-01".to_string(),
-            },
+            &test_runtime_context("final", "bug", "ID-1", "QA", "2026-04-01"),
             &cfg,
             "demo.c",
         );
@@ -2653,10 +2920,13 @@ end = "// repo-end"
     #[test]
     fn pending_modify_and_delete_blocks_restore_and_rebuild() {
         let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
         cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.block_templates.modify.enabled = true;
         cfg.annotate.block_templates.modify.start = "// modify {reason}".to_string();
         cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+        cfg.annotate.block_templates.del.enabled = true;
         cfg.annotate.block_templates.del.start = "// del {reason}".to_string();
         cfg.annotate.block_templates.del.end = "// end del".to_string();
         cfg.annotate.old_code.mode = None;
@@ -2683,10 +2953,13 @@ end = "// repo-end"
     #[test]
     fn history_annotation_blocks_are_not_rolled_back() {
         let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
         cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.block_templates.modify.enabled = true;
         cfg.annotate.block_templates.modify.start = "// modify {reason}".to_string();
         cfg.annotate.block_templates.modify.end = "// end modify".to_string();
+        cfg.annotate.block_templates.del.enabled = true;
         cfg.annotate.block_templates.del.start = "// del {reason}".to_string();
         cfg.annotate.block_templates.del.end = "// end del".to_string();
         cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
@@ -2738,7 +3011,8 @@ end = "// repo-end"
     #[test]
     fn context_extraction_recovers_kind_when_reason_contains_spaces() {
         let mut cfg = AppConfig::default();
-        cfg.annotate.reference_kinds = vec!["bug".to_string(), "req".to_string()];
+        *cfg.annotate.reference_kind_values_mut() = vec!["bug".to_string(), "req".to_string()];
+        cfg.annotate.block_templates.del.enabled = true;
         cfg.annotate.block_templates.del.start =
             "// del by {author_tag} {date} for {reason} {reference_kind}:{reference_value} {@"
                 .to_string();
@@ -2758,6 +3032,7 @@ end = "// repo-end"
     #[test]
     fn malformed_block_boundary_fails_conservatively() {
         let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
         cfg.annotate.block_templates.add.end = "// end add".to_string();
         cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);
@@ -2770,8 +3045,10 @@ end = "// repo-end"
     #[test]
     fn overlapping_pending_blocks_fail_conservatively() {
         let mut cfg = AppConfig::default();
+        cfg.annotate.block_templates.add.enabled = true;
         cfg.annotate.block_templates.add.start = "// add {reason}".to_string();
         cfg.annotate.block_templates.add.end = "// end add".to_string();
+        cfg.annotate.block_templates.modify.enabled = true;
         cfg.annotate.block_templates.modify.start = "// modify {reason}".to_string();
         cfg.annotate.block_templates.modify.end = "// end modify".to_string();
         cfg.annotate.old_code.mode = Some(AnnotateOldCodeMode::None);

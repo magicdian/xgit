@@ -57,8 +57,8 @@ fn main() -> Result<()> {
         Some(("push", sub)) => execute_push(sub, &catalog, &runtime)?,
         Some(("setup", sub)) => execute_setup(sub, &catalog, &runtime)?,
         Some(("annotate", sub)) => execute_annotate(sub, &catalog, &runtime, &cwd)?,
-        Some(("reset", sub)) => execute_reset(sub, &catalog)?,
-        Some(("checkout-remote", sub)) => execute_checkout_remote(sub, &catalog)?,
+        Some(("reset", sub)) => execute_reset(sub, &catalog, &runtime)?,
+        Some(("checkout-remote", sub)) => execute_checkout_remote(sub, &catalog, &runtime)?,
         Some(("completion", sub)) => execute_completion(sub, &catalog, &runtime)?,
         _ => {
             command.print_help()?;
@@ -80,6 +80,21 @@ fn build_runtime_command(catalog: &Catalog, runtime: &RuntimeConfig) -> Command 
         catalog.t("cmd.annotate.about")
     } else {
         format!("{} {}", catalog.t("cmd.annotate.about"), disabled)
+    };
+    let reset_about = if runtime.effective.features.reset {
+        catalog.t("cmd.reset.about")
+    } else {
+        format!("{} {}", catalog.t("cmd.reset.about"), disabled)
+    };
+    let checkout_remote_about = if runtime.effective.features.checkout_remote {
+        catalog.t("cmd.checkout_remote.about")
+    } else {
+        format!("{} {}", catalog.t("cmd.checkout_remote.about"), disabled)
+    };
+    let completion_about = if runtime.effective.features.completion {
+        catalog.t("cmd.completion.about")
+    } else {
+        format!("{} {}", catalog.t("cmd.completion.about"), disabled)
     };
 
     Command::new("xgit")
@@ -188,7 +203,7 @@ fn build_runtime_command(catalog: &Catalog, runtime: &RuntimeConfig) -> Command 
                 ),
         )
         .subcommand(
-            Command::new("reset").about(catalog.t("cmd.reset.about")).arg(
+            Command::new("reset").about(reset_about).arg(
                 Arg::new("hard")
                     .long("hard")
                     .action(ArgAction::SetTrue)
@@ -197,7 +212,7 @@ fn build_runtime_command(catalog: &Catalog, runtime: &RuntimeConfig) -> Command 
         )
         .subcommand(
             Command::new("checkout-remote")
-                .about(catalog.t("cmd.checkout_remote.about"))
+                .about(checkout_remote_about)
                 .arg(
                     Arg::new("remote-branch")
                         .num_args(1)
@@ -214,7 +229,7 @@ fn build_runtime_command(catalog: &Catalog, runtime: &RuntimeConfig) -> Command 
         )
         .subcommand(
             Command::new("completion")
-                .about(catalog.t("cmd.completion.about"))
+                .about(completion_about)
                 .arg(
                     Arg::new("install")
                         .long("install")
@@ -376,7 +391,17 @@ fn execute_annotate(
     annotate::run(options, &runtime.effective, catalog, cwd)
 }
 
-fn execute_reset(sub: &ArgMatches, catalog: &Catalog) -> Result<()> {
+fn execute_reset(sub: &ArgMatches, catalog: &Catalog, runtime: &RuntimeConfig) -> Result<()> {
+    if !runtime.effective.features.reset {
+        bail!(
+            "{}",
+            catalog.tf(
+                "error.feature.disabled",
+                &[("feature", catalog.t("feature.reset"))]
+            )
+        );
+    }
+
     if which::which("git").is_err() {
         bail!("{}", catalog.t("error.git.not_found"));
     }
@@ -405,7 +430,21 @@ fn execute_reset(sub: &ArgMatches, catalog: &Catalog) -> Result<()> {
     Ok(())
 }
 
-fn execute_checkout_remote(sub: &ArgMatches, catalog: &Catalog) -> Result<()> {
+fn execute_checkout_remote(
+    sub: &ArgMatches,
+    catalog: &Catalog,
+    runtime: &RuntimeConfig,
+) -> Result<()> {
+    if !runtime.effective.features.checkout_remote {
+        bail!(
+            "{}",
+            catalog.tf(
+                "error.feature.disabled",
+                &[("feature", catalog.t("feature.checkout_remote"))]
+            )
+        );
+    }
+
     if which::which("git").is_err() {
         bail!("{}", catalog.t("error.git.not_found"));
     }
@@ -456,6 +495,16 @@ fn execute_checkout_remote(sub: &ArgMatches, catalog: &Catalog) -> Result<()> {
 }
 
 fn execute_completion(sub: &ArgMatches, catalog: &Catalog, runtime: &RuntimeConfig) -> Result<()> {
+    if !runtime.effective.features.completion {
+        bail!(
+            "{}",
+            catalog.tf(
+                "error.feature.disabled",
+                &[("feature", catalog.t("feature.completion"))]
+            )
+        );
+    }
+
     if sub.get_flag("install") {
         return execute_completion_install(sub, catalog, runtime);
     }
@@ -778,6 +827,9 @@ mod tests {
                 features: FeaturesConfig {
                     push: false,
                     annotate: false,
+                    reset: false,
+                    checkout_remote: false,
+                    completion: false,
                 },
                 annotate: crate::config::AnnotateConfig::default(),
                 ..AppConfig::default()

@@ -2,7 +2,7 @@ use crate::code_file_types::builtin_default_file_rules;
 use crate::i18n;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -40,6 +40,9 @@ pub struct UiConfig {
 pub struct FeaturesConfig {
     pub push: bool,
     pub annotate: bool,
+    pub reset: bool,
+    pub checkout_remote: bool,
+    pub completion: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -53,7 +56,6 @@ pub struct PushConfig {
 pub struct AnnotateConfig {
     pub staged: StagedConfig,
     pub form: AnnotateFormConfig,
-    pub reference_kinds: Vec<String>,
     pub date: AnnotateDateConfig,
     pub render: AnnotateRenderConfig,
     pub old_code: AnnotateOldCodeConfig,
@@ -70,7 +72,32 @@ pub struct StagedConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AnnotateFormConfig {
-    pub fields: Vec<String>,
+    pub fields: Vec<AnnotateFormFieldConfig>,
+    pub option_sets: BTreeMap<String, AnnotateOptionSetConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct AnnotateFormFieldConfig {
+    pub id: String,
+    pub label: String,
+    pub kind: AnnotateFormFieldKind,
+    pub required: bool,
+    pub option_set: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct AnnotateOptionSetConfig {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnotateFormFieldKind {
+    #[default]
+    Text,
+    SingleSelect,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,6 +116,7 @@ pub struct AnnotateDateConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AnnotateOldCodeConfig {
+    pub enabled: bool,
     pub mode: Option<AnnotateOldCodeMode>,
     pub line_comment: AnnotateOldCodeLineCommentConfig,
     pub block_comment: AnnotateOldCodeBlockCommentConfig,
@@ -136,6 +164,7 @@ pub struct BlockTemplates {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BlockTemplate {
+    pub enabled: bool,
     pub start: String,
     pub end: String,
 }
@@ -180,6 +209,9 @@ impl Default for FeaturesConfig {
         Self {
             push: true,
             annotate: true,
+            reset: true,
+            checkout_remote: true,
+            completion: true,
         }
     }
 }
@@ -189,7 +221,6 @@ impl Default for AnnotateConfig {
         Self {
             staged: StagedConfig::default(),
             form: AnnotateFormConfig::default(),
-            reference_kinds: vec!["bug".to_string(), "req".to_string()],
             date: AnnotateDateConfig::default(),
             render: AnnotateRenderConfig::default(),
             old_code: AnnotateOldCodeConfig::default(),
@@ -210,11 +241,8 @@ impl Default for StagedConfig {
 impl Default for AnnotateFormConfig {
     fn default() -> Self {
         Self {
-            fields: vec![
-                "reason".to_string(),
-                "reference_kind".to_string(),
-                "reference_value".to_string(),
-            ],
+            fields: default_annotate_form_fields(),
+            option_sets: default_annotate_option_sets(),
         }
     }
 }
@@ -239,6 +267,7 @@ impl Default for AnnotateDateConfig {
 impl Default for AnnotateOldCodeConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             mode: None,
             line_comment: AnnotateOldCodeLineCommentConfig::default(),
             block_comment: AnnotateOldCodeBlockCommentConfig::default(),
@@ -275,21 +304,9 @@ impl Default for AnnotateOldCodeBlockCommentConfig {
 impl Default for BlockTemplates {
     fn default() -> Self {
         Self {
-            add: BlockTemplate {
-                start: "// {author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
-                    .to_string(),
-                end: compatibility_end_template("add"),
-            },
-            modify: BlockTemplate {
-                start: "// {author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
-                    .to_string(),
-                end: compatibility_end_template("modify"),
-            },
-            del: BlockTemplate {
-                start: "// {author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
-                    .to_string(),
-                end: compatibility_end_template("del"),
-            },
+            add: default_block_template("add"),
+            modify: default_block_template("modify"),
+            del: default_block_template("del"),
         }
     }
 }
@@ -297,8 +314,18 @@ impl Default for BlockTemplates {
 impl Default for BlockTemplate {
     fn default() -> Self {
         Self {
+            enabled: false,
             start: String::new(),
             end: String::new(),
+        }
+    }
+}
+
+impl BlockTemplate {
+    pub fn enable_if_customized_for(&mut self, kind: &str) {
+        if self.start != builtin_start_template(kind) || self.end != compatibility_end_template(kind)
+        {
+            self.enabled = true;
         }
     }
 }
@@ -309,6 +336,173 @@ impl Default for FileRuleConfig {
             pattern: "*.c".to_string(),
             renderer: "c_line_block".to_string(),
         }
+    }
+}
+
+impl AnnotateConfig {
+    pub fn reference_kind_option_set_name() -> &'static str {
+        "reference_kinds"
+    }
+
+    pub fn reference_kind_values(&self) -> &[String] {
+        self.form.option_values(Self::reference_kind_option_set_name())
+    }
+
+    #[cfg(test)]
+    pub fn reference_kind_values_mut(&mut self) -> &mut Vec<String> {
+        &mut self
+            .form
+            .option_sets
+            .entry(Self::reference_kind_option_set_name().to_string())
+            .or_insert_with(|| AnnotateOptionSetConfig {
+                values: vec!["bug".to_string(), "req".to_string()],
+            })
+            .values
+    }
+
+    pub fn normalize(&mut self) {
+        self.form.normalize();
+    }
+}
+
+impl AnnotateFormConfig {
+    pub fn uses_field(&self, id: &str) -> bool {
+        self.fields.iter().any(|field| field.id == id)
+    }
+
+    pub fn option_values(&self, name: &str) -> &[String] {
+        self.option_sets
+            .get(name)
+            .map(|set| set.values.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn normalize(&mut self) {
+        self.fields = self
+            .fields
+            .iter()
+            .filter_map(|field| {
+                let id = field.id.trim();
+                if id.is_empty() {
+                    None
+                } else {
+                    Some(AnnotateFormFieldConfig {
+                        id: id.to_string(),
+                        label: field.label.trim().to_string(),
+                        kind: field.kind.clone(),
+                        required: field.required,
+                        option_set: field
+                            .option_set
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(std::string::ToString::to_string),
+                    })
+                }
+            })
+            .collect();
+
+        if self.fields.is_empty() {
+            self.fields = default_annotate_form_fields();
+        }
+
+        self.option_sets
+            .entry(AnnotateConfig::reference_kind_option_set_name().to_string())
+            .or_insert_with(|| AnnotateOptionSetConfig {
+                values: vec!["bug".to_string(), "req".to_string()],
+            });
+
+        self.option_sets.retain(|name, set| {
+            let trimmed_name = name.trim();
+            if trimmed_name.is_empty() {
+                return false;
+            }
+
+            let mut values = Vec::<String>::new();
+            for value in &set.values {
+                let trimmed_value = value.trim();
+                if trimmed_value.is_empty()
+                    || values.iter().any(|existing| existing == trimmed_value)
+                {
+                    continue;
+                }
+                values.push(trimmed_value.to_string());
+            }
+            set.values = values;
+            true
+        });
+
+        for field in &mut self.fields {
+            if field.label.trim().is_empty() {
+                field.label = default_field_label(field.id.as_str());
+            }
+            if field.id == "reference_kind" {
+                field.kind = AnnotateFormFieldKind::SingleSelect;
+                if field.option_set.is_none() {
+                    field.option_set =
+                        Some(AnnotateConfig::reference_kind_option_set_name().to_string());
+                }
+            }
+        }
+    }
+}
+
+fn default_annotate_form_fields() -> Vec<AnnotateFormFieldConfig> {
+    vec![
+        default_field_definition("reason"),
+        default_field_definition("reference_kind"),
+        default_field_definition("reference_value"),
+    ]
+}
+
+fn default_annotate_option_sets() -> BTreeMap<String, AnnotateOptionSetConfig> {
+    BTreeMap::from([(
+        AnnotateConfig::reference_kind_option_set_name().to_string(),
+        AnnotateOptionSetConfig {
+            values: vec!["bug".to_string(), "req".to_string()],
+        },
+    )])
+}
+
+pub fn default_field_definition(id: &str) -> AnnotateFormFieldConfig {
+    match id {
+        "reason" => AnnotateFormFieldConfig {
+            id: "reason".to_string(),
+            label: "原因".to_string(),
+            kind: AnnotateFormFieldKind::Text,
+            required: true,
+            option_set: None,
+        },
+        "reference_kind" => AnnotateFormFieldConfig {
+            id: "reference_kind".to_string(),
+            label: "引用类型".to_string(),
+            kind: AnnotateFormFieldKind::SingleSelect,
+            required: true,
+            option_set: Some(AnnotateConfig::reference_kind_option_set_name().to_string()),
+        },
+        "reference_value" => AnnotateFormFieldConfig {
+            id: "reference_value".to_string(),
+            label: "引用值".to_string(),
+            kind: AnnotateFormFieldKind::Text,
+            required: true,
+            option_set: None,
+        },
+        other => AnnotateFormFieldConfig {
+            id: other.to_string(),
+            label: default_field_label(other),
+            kind: AnnotateFormFieldKind::Text,
+            required: true,
+            option_set: None,
+        },
+    }
+}
+
+fn default_field_label(id: &str) -> String {
+    match id {
+        "reason" => "原因".to_string(),
+        "reference_kind" => "引用类型".to_string(),
+        "reference_value" => "引用值".to_string(),
+        other => other.replace('_', " "),
     }
 }
 
@@ -333,6 +527,9 @@ struct PartialUiConfig {
 struct PartialFeaturesConfig {
     push: Option<bool>,
     annotate: Option<bool>,
+    reset: Option<bool>,
+    checkout_remote: Option<bool>,
+    completion: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -358,7 +555,15 @@ struct PartialStagedConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct PartialAnnotateFormConfig {
-    fields: Option<Vec<String>>,
+    fields: Option<PartialAnnotateFormFields>,
+    option_sets: Option<BTreeMap<String, AnnotateOptionSetConfig>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PartialAnnotateFormFields {
+    Legacy(Vec<String>),
+    Structured(Vec<AnnotateFormFieldConfig>),
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -377,6 +582,7 @@ struct PartialAnnotateDateConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct PartialAnnotateOldCodeConfig {
+    enabled: Option<bool>,
     mode: Option<AnnotateOldCodeMode>,
     line_comment: Option<PartialAnnotateOldCodeLineCommentConfig>,
     block_comment: Option<PartialAnnotateOldCodeBlockCommentConfig>,
@@ -417,6 +623,7 @@ struct PartialBlockTemplates {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct PartialBlockTemplate {
+    enabled: Option<bool>,
     start: Option<String>,
     end: Option<String>,
 }
@@ -443,6 +650,15 @@ impl AppConfig {
             if let Some(annotate) = features.annotate {
                 self.features.annotate = annotate;
             }
+            if let Some(reset) = features.reset {
+                self.features.reset = reset;
+            }
+            if let Some(checkout_remote) = features.checkout_remote {
+                self.features.checkout_remote = checkout_remote;
+            }
+            if let Some(completion) = features.completion {
+                self.features.completion = completion;
+            }
         }
         if let Some(push) = partial.push {
             self.push = push;
@@ -455,11 +671,30 @@ impl AppConfig {
             }
             if let Some(form) = annotate.form {
                 if let Some(fields) = form.fields {
-                    self.annotate.form.fields = fields;
+                    self.annotate.form.fields = match fields {
+                        PartialAnnotateFormFields::Legacy(ids) => ids
+                            .into_iter()
+                            .map(|id| default_field_definition(id.as_str()))
+                            .collect(),
+                        PartialAnnotateFormFields::Structured(fields) => fields,
+                    };
+                }
+                if let Some(option_sets) = form.option_sets {
+                    for (name, option_set) in option_sets {
+                        self.annotate.form.option_sets.insert(name, option_set);
+                    }
                 }
             }
             if let Some(reference_kinds) = annotate.reference_kinds {
-                self.annotate.reference_kinds = reference_kinds;
+                self.annotate
+                    .form
+                    .option_sets
+                    .insert(
+                        AnnotateConfig::reference_kind_option_set_name().to_string(),
+                        AnnotateOptionSetConfig {
+                            values: reference_kinds,
+                        },
+                    );
             }
             if let Some(date) = annotate.date {
                 if let Some(format) = date.format {
@@ -475,8 +710,15 @@ impl AppConfig {
                 }
             }
             if let Some(old_code) = annotate.old_code {
+                if let Some(enabled) = old_code.enabled {
+                    self.annotate.old_code.enabled = enabled;
+                }
                 if let Some(mode) = old_code.mode {
-                    self.annotate.old_code.mode = Some(mode);
+                    if mode == AnnotateOldCodeMode::None {
+                        self.annotate.old_code.enabled = false;
+                    } else {
+                        self.annotate.old_code.mode = Some(mode);
+                    }
                 }
                 if let Some(line_comment) = old_code.line_comment {
                     if let Some(layout) = line_comment.layout {
@@ -507,35 +749,57 @@ impl AppConfig {
             if let Some(block_templates) = annotate.block_templates {
                 if let Some(add) = block_templates.add {
                     has_new_add_template = true;
+                    if let Some(enabled) = add.enabled {
+                        self.annotate.block_templates.add.enabled = enabled;
+                    }
                     if let Some(start) = add.start {
                         self.annotate.block_templates.add.start = start;
                     }
                     if let Some(end) = add.end {
                         self.annotate.block_templates.add.end = end;
                     }
+                    if add.enabled.is_none() {
+                        self.annotate.block_templates.add.enable_if_customized_for("add");
+                    }
                 }
                 if let Some(modify) = block_templates.modify {
                     has_new_modify_template = true;
+                    if let Some(enabled) = modify.enabled {
+                        self.annotate.block_templates.modify.enabled = enabled;
+                    }
                     if let Some(start) = modify.start {
                         self.annotate.block_templates.modify.start = start;
                     }
                     if let Some(end) = modify.end {
                         self.annotate.block_templates.modify.end = end;
                     }
+                    if modify.enabled.is_none() {
+                        self.annotate
+                            .block_templates
+                            .modify
+                            .enable_if_customized_for("modify");
+                    }
                 }
                 if let Some(del) = block_templates.del {
                     has_new_del_template = true;
+                    if let Some(enabled) = del.enabled {
+                        self.annotate.block_templates.del.enabled = enabled;
+                    }
                     if let Some(start) = del.start {
                         self.annotate.block_templates.del.start = start;
                     }
                     if let Some(end) = del.end {
                         self.annotate.block_templates.del.end = end;
                     }
+                    if del.enabled.is_none() {
+                        self.annotate.block_templates.del.enable_if_customized_for("del");
+                    }
                 }
             }
             if let Some(policies) = annotate.policies {
                 if !has_new_add_template {
                     if let Some(add) = policies.add {
+                        self.annotate.block_templates.add.enabled = true;
                         self.annotate.block_templates.add.start =
                             legacy_policy_to_start_template(&add);
                         self.annotate.block_templates.add.end = compatibility_end_template("add");
@@ -543,6 +807,7 @@ impl AppConfig {
                 }
                 if !has_new_modify_template {
                     if let Some(modify) = policies.modify {
+                        self.annotate.block_templates.modify.enabled = true;
                         self.annotate.block_templates.modify.start =
                             legacy_policy_to_start_template(&modify);
                         self.annotate.block_templates.modify.end =
@@ -551,6 +816,7 @@ impl AppConfig {
                 }
                 if !has_new_del_template {
                     if let Some(del) = policies.del {
+                        self.annotate.block_templates.del.enabled = true;
                         self.annotate.block_templates.del.start =
                             legacy_policy_to_start_template(&del);
                         self.annotate.block_templates.del.end = compatibility_end_template("del");
@@ -560,6 +826,7 @@ impl AppConfig {
             if let Some(file_rules) = annotate.file_rules {
                 self.annotate.file_rules = file_rules;
             }
+            self.annotate.normalize();
         }
         if let Some(identity) = partial.identity {
             if let Some(author_tag) = identity.author_tag {
@@ -630,6 +897,8 @@ pub fn merge_layers(
             .unwrap_or("zh-CN")
             .to_string();
     }
+
+    cfg.annotate.normalize();
 
     Ok(cfg)
 }
@@ -712,7 +981,21 @@ fn parse_env_partial(env_map: &HashMap<String, String>) -> Result<PartialAppConf
     if let Some(value) = env_map.get("XGIT_FEATURE_ANNOTATE") {
         features.annotate = Some(parse_bool_env("XGIT_FEATURE_ANNOTATE", value)?);
     }
-    if features.push.is_some() || features.annotate.is_some() {
+    if let Some(value) = env_map.get("XGIT_FEATURE_RESET") {
+        features.reset = Some(parse_bool_env("XGIT_FEATURE_RESET", value)?);
+    }
+    if let Some(value) = env_map.get("XGIT_FEATURE_CHECKOUT_REMOTE") {
+        features.checkout_remote = Some(parse_bool_env("XGIT_FEATURE_CHECKOUT_REMOTE", value)?);
+    }
+    if let Some(value) = env_map.get("XGIT_FEATURE_COMPLETION") {
+        features.completion = Some(parse_bool_env("XGIT_FEATURE_COMPLETION", value)?);
+    }
+    if features.push.is_some()
+        || features.annotate.is_some()
+        || features.reset.is_some()
+        || features.checkout_remote.is_some()
+        || features.completion.is_some()
+    {
         partial.features = Some(features);
     }
 
@@ -745,6 +1028,26 @@ fn parse_bool_env(name: &str, value: &str) -> Result<bool> {
 
 fn compatibility_end_template(kind: &str) -> String {
     format!("// end {kind}")
+}
+
+pub fn builtin_start_template(kind: &str) -> String {
+    match kind {
+        "add" => "// {author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
+            .to_string(),
+        "modify" => "// {author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
+            .to_string(),
+        "del" => "// {author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+pub fn default_block_template(kind: &str) -> BlockTemplate {
+    BlockTemplate {
+        enabled: false,
+        start: builtin_start_template(kind),
+        end: compatibility_end_template(kind),
+    }
 }
 
 fn legacy_policy_to_start_template(policy: &str) -> String {
@@ -844,6 +1147,7 @@ wrap_blank_lines = false
         let env = HashMap::new();
         let cfg = merge_layers(None, None, &env, "zh-CN").unwrap();
         assert_eq!(cfg.annotate.date.format, "yyyy-mm-dd");
+        assert!(cfg.annotate.old_code.enabled);
         assert_eq!(cfg.annotate.old_code.mode, None);
         assert_eq!(
             cfg.annotate.old_code.line_comment.layout,
@@ -860,6 +1164,7 @@ wrap_blank_lines = false
 format = "yyyy/mm/dd"
 
 [annotate.old_code]
+enabled = true
 mode = "line_comment"
 
 [annotate.old_code.line_comment]
@@ -882,6 +1187,51 @@ body_suffix = ";"
         assert_eq!(cfg.annotate.old_code.line_comment.header, "legacy old");
         assert_eq!(cfg.annotate.old_code.line_comment.body_prefix, "old=>");
         assert_eq!(cfg.annotate.old_code.line_comment.body_suffix, ";");
+    }
+
+    #[test]
+    fn legacy_old_code_none_mode_disables_without_overwriting_mode() {
+        let project = r#"
+[annotate.old_code]
+mode = "none"
+"#;
+        let env = HashMap::new();
+        let cfg = merge_layers(None, Some(project), &env, "zh-CN").unwrap();
+        assert!(!cfg.annotate.old_code.enabled);
+        assert_eq!(cfg.annotate.old_code.mode, None);
+    }
+
+    #[test]
+    fn old_code_can_be_disabled_while_preserving_explicit_mode() {
+        let project = r#"
+[annotate.old_code]
+enabled = false
+mode = "block_comment"
+"#;
+        let env = HashMap::new();
+        let cfg = merge_layers(None, Some(project), &env, "zh-CN").unwrap();
+        assert!(!cfg.annotate.old_code.enabled);
+        assert_eq!(
+            cfg.annotate.old_code.mode,
+            Some(AnnotateOldCodeMode::BlockComment)
+        );
+    }
+
+    #[test]
+    fn old_code_mode_survives_disable_save_and_reload() {
+        let mut config = crate::config::AppConfig::default();
+        config.annotate.old_code.enabled = false;
+        config.annotate.old_code.mode = Some(AnnotateOldCodeMode::LineComment);
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let env = HashMap::new();
+        let reloaded = merge_layers(None, Some(serialized.as_str()), &env, "zh-CN").unwrap();
+
+        assert!(!reloaded.annotate.old_code.enabled);
+        assert_eq!(
+            reloaded.annotate.old_code.mode,
+            Some(AnnotateOldCodeMode::LineComment)
+        );
     }
 
     #[test]
@@ -915,5 +1265,27 @@ end = "//@}"
 
         assert_eq!(cfg.annotate.block_templates.add.start, "// custom add");
         assert_eq!(cfg.annotate.block_templates.add.end, "//@}");
+    }
+
+    #[test]
+    fn disabled_template_roundtrip_preserves_custom_value() {
+        let mut config = crate::config::AppConfig::default();
+        config.annotate.block_templates.modify.enabled = false;
+        config.annotate.block_templates.modify.start = "// custom modify value".to_string();
+        config.annotate.block_templates.modify.end = "// custom modify end".to_string();
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let env = HashMap::new();
+        let reloaded = merge_layers(None, Some(serialized.as_str()), &env, "zh-CN").unwrap();
+
+        assert!(!reloaded.annotate.block_templates.modify.enabled);
+        assert_eq!(
+            reloaded.annotate.block_templates.modify.start,
+            "// custom modify value"
+        );
+        assert_eq!(
+            reloaded.annotate.block_templates.modify.end,
+            "// custom modify end"
+        );
     }
 }

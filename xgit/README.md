@@ -3,7 +3,7 @@ xgit — 可配置的 Git 开发辅助工具
 ## 版本维护
 - 单一版本来源：`Cargo.toml` 的 `[package].version`
 - CLI 版本输出（`xgit --version`）直接读取 Cargo 包版本
-- 推荐可以使用日期化命名约定 `YYMM.DD.BuildNumber`，但必须保持 Cargo 兼容；当前落地写法：`2604.2.2`（语义对应 `2604.02.2`）
+- 推荐可以使用日期化命名约定 `YYMM.DD.BuildNumber`，但必须保持 Cargo 兼容；当前落地写法：`2604.2.3`（语义对应 `2604.02.3`）
 
 ## 主要能力
 - `push`：自动识别 remote 并执行推送
@@ -26,15 +26,21 @@ xgit — 可配置的 Git 开发辅助工具
 ## setup 用法
 - 全局配置：`xgit setup`
 - 项目配置：`xgit setup --project`
-- 关键操作：
-  - 主页面：`Up/Down` 选择栏目，`Enter` 进入
-  - 子页面：`Up/Down` 切换字段，`Enter` 或 `Left/Right` 切换布尔值
-  - `代码文件类型`：`Enter` 打开层级选择器；分类层 `Space` 整类切换，子项层 `Space` 单项切换，`Enter/Esc` 返回
-  - 子页面：`ESC` 返回主页面
-  - 主页面：`ESC` 退出（有未保存修改时会弹出保存确认）
-  - `e` 编辑文本字段
-  - `s` 保存配置
-  - `q` 退出（与 `ESC` 一致）
+- 导航模式（menuconfig 单栏树形）：
+  - 顶部显示当前路径 breadcrumb，主体只显示当前层级菜单项
+  - `Up/Down`：移动当前层选项
+  - `Enter`：进入子菜单，或对当前项执行进入/编辑
+  - `Space`：切换布尔项/多选项
+  - `Esc`：返回上一级；在根菜单触发退出确认
+  - `e`：编辑文本字段
+  - `s`：保存配置
+  - `q`：退出（与根菜单 `Esc` 一致）
+- 注释设置子菜单：
+  - `引用与表单`：维护结构化字段定义与 option set（不再通过 CSV 直接编辑）
+  - `代码文件类型`：分类层与扩展名层的层级多选
+  - `渲染行为`：缩进对齐、空白行包裹、日期格式
+  - `新增格式 / 修改格式 / 删除格式`：支持“启用自定义格式”开关与起始/结束模板
+  - `旧代码处理`：旧代码展示模式及注释布局细项
 
 ## push 用法
 - `xgit push`
@@ -112,6 +118,7 @@ xgit annotate --latest-commit --reason "refactor" --reference-kind req --referen
 - 上述忽略不会影响仓库级配置优先级：`<git-root>/.xgit/config.toml` 仍然按默认规则生效且优先于全局配置
 - setup 中代码文件类型默认启用 `C/C++` 与 `Java`，并可按分类启用 `JavaScript`、`Rust`、`Kotlin`
 - 渲染器按文件规则分发；当前完整实现 `c_line_block`（上述内置类型均可映射到该渲染器）
+- 运行时上下文由结构化字段定义驱动，模板可按字段 `id` 展开占位符；默认兼容 `reason` / `reference_kind` / `reference_value`，也支持自定义字段占位符
 - 注释渲染可通过配置项控制：
   - `annotate.render.align_with_code_indent`：注释是否对齐代码缩进（默认 `false`）
   - `annotate.render.wrap_blank_lines`：注释块是否包裹变更中的空白行（默认 `true`）
