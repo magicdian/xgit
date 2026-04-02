@@ -3,7 +3,7 @@ xgit — 可配置的 Git 开发辅助工具
 ## 版本维护
 - 单一版本来源：`Cargo.toml` 的 `[package].version`
 - CLI 版本输出（`xgit --version`）直接读取 Cargo 包版本
-- 推荐可以使用日期化命名约定 `YYMM.DD.BuildNumber`，但必须保持 Cargo 兼容；当前落地写法：`2604.2.1`（语义对应 `2604.02.1`）
+- 推荐可以使用日期化命名约定 `YYMM.DD.BuildNumber`，但必须保持 Cargo 兼容；当前落地写法：`2604.2.2`（语义对应 `2604.02.2`）
 
 ## 主要能力
 - `push`：自动识别 remote 并执行推送
@@ -11,6 +11,7 @@ xgit — 可配置的 Git 开发辅助工具
 - `annotate`：基于 staged/latest-commit 改动生成规范化注释块预览
 - `reset`：将当前本地分支重置到其 upstream 跟踪分支
 - `checkout-remote`：从远端跟踪分支创建本地分支
+- `completion`：生成 shell 补全脚本（bash/zsh/fish/powershell）
 
 ## 配置位置与优先级
 - 全局配置：`~/.xgit/config.toml`
@@ -65,6 +66,34 @@ xgit — 可配置的 Git 开发辅助工具
   - remote 解析采用“首选 remote（`XGIT_REMOTE` / `git config xgit.remote` / 常见默认 remote）优先，找不到时回退候选扫描”的策略
   - 若候选 remote branch 不存在或存在多个同名候选，命令会报错而不是静默选择
 
+## completion 用法
+生成脚本：
+
+```bash
+xgit completion bash
+xgit completion zsh
+xgit completion fish
+xgit completion powershell
+```
+
+交互安装（自动识别当前终端 shell）：
+
+```bash
+xgit completion --install
+```
+
+说明：
+- `--install` 会先把脚本生成到 `tmp` 目录并打印路径，便于你先检查内容
+- 命令会提示将写入的补全脚本目标路径与 shell 配置文件路径
+- 只有在确认提示输入 `Y` 或 `y` 才会继续写入；其他输入（含回车）会取消安装
+- 写入 shell 配置时使用托管注释块（managed block）；后续再次安装会识别并替换旧块，不会重复追加
+
+常见启用方式：
+- bash：`xgit completion bash > ~/.xgit/completions/xgit.bash`，再在 shell 配置中 `source ~/.xgit/completions/xgit.bash`
+- zsh：`xgit completion zsh > ~/.xgit/completions/_xgit`，并将目录加入 `fpath` 后执行 `autoload -U compinit && compinit`
+- fish：`xgit completion fish > ~/.config/fish/completions/xgit.fish`
+- powershell：可将 `xgit completion powershell` 输出写入 profile 中执行，或单独脚本后在 profile 中 dot-source
+
 ## 注释规范化流程
 默认使用 staged 改动，也可以显式指定 latest-commit：
 
@@ -78,7 +107,9 @@ xgit annotate --latest-commit --reason "refactor" --reference-kind req --referen
 - `--latest-commit` 模式会校验：
   - 非根提交
   - 非 merge commit
-  - 工作区干净
+  - 工作区干净（会忽略仓库根 `.xgit/` 目录及其子路径）
+- `annotate` 默认模式与 `annotate --latest-commit` 都会忽略仓库根 `.xgit/` 目录及其子路径，避免仓库配置目录被误判为待处理文件
+- 上述忽略不会影响仓库级配置优先级：`<git-root>/.xgit/config.toml` 仍然按默认规则生效且优先于全局配置
 - setup 中代码文件类型默认启用 `C/C++` 与 `Java`，并可按分类启用 `JavaScript`、`Rust`、`Kotlin`
 - 渲染器按文件规则分发；当前完整实现 `c_line_block`（上述内置类型均可映射到该渲染器）
 - 注释渲染可通过配置项控制：

@@ -1257,13 +1257,21 @@ fn collect_staged_changes(cwd: &Path, include_untracked: bool) -> Result<Vec<Fil
             });
         }
     }
-    dedup_changes(changes)
+    let filtered = changes
+        .into_iter()
+        .filter(|change| !is_repo_xgit_path(&change.path))
+        .collect::<Vec<_>>();
+    dedup_changes(filtered)
 }
 
 fn collect_latest_commit_changes(cwd: &Path, catalog: &Catalog) -> Result<Vec<FileChange>> {
     validate_latest_commit_mode(cwd, catalog)?;
     let output = git_stdout(cwd, &["diff", "--name-status", "HEAD^", "HEAD"])?;
-    dedup_changes(parse_name_status_output(&output))
+    let changes = parse_name_status_output(&output)
+        .into_iter()
+        .filter(|change| !is_repo_xgit_path(&change.path))
+        .collect::<Vec<_>>();
+    dedup_changes(changes)
 }
 
 fn validate_latest_commit_mode(cwd: &Path, catalog: &Catalog) -> Result<()> {
@@ -1281,11 +1289,44 @@ fn validate_latest_commit_mode(cwd: &Path, catalog: &Catalog) -> Result<()> {
     }
 
     let status = git_stdout(cwd, &["status", "--porcelain"])?;
-    if !status.trim().is_empty() {
+    let has_non_xgit_dirty = status
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .any(|line| !is_ignorable_status_line(line));
+    if has_non_xgit_dirty {
         bail!("{}", catalog.t("error.annotate.latest_commit_dirty"));
     }
 
     Ok(())
+}
+
+fn is_repo_xgit_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    normalized == ".xgit" || normalized.starts_with(".xgit/")
+}
+
+fn is_ignorable_status_line(line: &str) -> bool {
+    parse_status_paths(line)
+        .iter()
+        .all(|path| is_repo_xgit_path(path))
+}
+
+fn parse_status_paths(line: &str) -> Vec<String> {
+    if line.len() < 4 {
+        return Vec::new();
+    }
+    let payload = line[3..].trim();
+    if payload.is_empty() {
+        return Vec::new();
+    }
+    if let Some((from, to)) = payload.split_once(" -> ") {
+        return vec![normalize_status_path(from), normalize_status_path(to)];
+    }
+    vec![normalize_status_path(payload)]
+}
+
+fn normalize_status_path(path: &str) -> String {
+    path.trim().trim_matches('"').to_string()
 }
 
 fn dedup_changes(changes: Vec<FileChange>) -> Result<Vec<FileChange>> {
@@ -1818,7 +1859,10 @@ mod tests {
         UnformattedFile, UnformattedReason,
     };
     use crate::code_file_types::{default_selected_keys, file_rules_from_selection};
-    use crate::config::{merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig};
+    use crate::config::{
+        load_runtime_config, merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig,
+        LoadConfigOptions,
+    };
     use chrono::NaiveDateTime;
     use std::collections::HashMap;
     use std::fs;
@@ -2362,6 +2406,18 @@ end = "//@}"
     }
 
     #[test]
+    fn staged_source_ignores_repo_xgit_paths() {
+        let repo = init_test_repo();
+        fs::write(repo.path().join(".xgit").join("cache.txt"), "tmp\n").unwrap();
+        fs::write(repo.path().join("tracked.c"), "int a = 1;\n").unwrap();
+        run_git(repo.path(), &["add", "tracked.c"]);
+
+        let changes = collect_staged_changes(repo.path(), true).unwrap();
+        assert!(changes.iter().any(|c| c.path == "tracked.c"));
+        assert!(!changes.iter().any(|c| c.path.starts_with(".xgit")));
+    }
+
+    #[test]
     fn latest_commit_source_collects_last_commit_changes() {
         let repo = init_test_repo();
         fs::write(repo.path().join("demo.c"), "int a = 1;\n").unwrap();
@@ -2375,6 +2431,80 @@ end = "//@}"
         let catalog = crate::i18n::load_catalog("en-US", repo.path()).unwrap();
         let changes = collect_latest_commit_changes(repo.path(), &catalog).unwrap();
         assert!(changes.iter().any(|c| c.path == "demo.c"));
+    }
+
+    #[test]
+    fn latest_commit_allows_dirty_repo_xgit_only() {
+        let repo = init_test_repo();
+        fs::write(repo.path().join("demo.c"), "int a = 1;\n").unwrap();
+        run_git(repo.path(), &["add", "demo.c"]);
+        run_git(repo.path(), &["commit", "-m", "init"]);
+
+        fs::write(repo.path().join("demo.c"), "int a = 2;\n").unwrap();
+        run_git(repo.path(), &["add", "demo.c"]);
+        run_git(repo.path(), &["commit", "-m", "update"]);
+
+        fs::write(repo.path().join(".xgit").join("runtime.state"), "dirty\n").unwrap();
+        let catalog = crate::i18n::load_catalog("en-US", repo.path()).unwrap();
+        let changes = collect_latest_commit_changes(repo.path(), &catalog).unwrap();
+        assert!(changes.iter().any(|c| c.path == "demo.c"));
+    }
+
+    #[test]
+    fn latest_commit_rejects_other_dirty_paths() {
+        let repo = init_test_repo();
+        fs::write(repo.path().join("demo.c"), "int a = 1;\n").unwrap();
+        run_git(repo.path(), &["add", "demo.c"]);
+        run_git(repo.path(), &["commit", "-m", "init"]);
+
+        fs::write(repo.path().join("demo.c"), "int a = 2;\n").unwrap();
+        run_git(repo.path(), &["add", "demo.c"]);
+        run_git(repo.path(), &["commit", "-m", "update"]);
+
+        fs::write(repo.path().join("other.txt"), "dirty\n").unwrap();
+        let catalog = crate::i18n::load_catalog("en-US", repo.path()).unwrap();
+        let err = collect_latest_commit_changes(repo.path(), &catalog).unwrap_err();
+        assert!(err.to_string().contains("clean working tree"));
+    }
+
+    #[test]
+    fn annotate_with_repo_config_still_works_when_repo_xgit_is_dirty() {
+        let repo = init_test_repo();
+        fs::write(repo.path().join("demo.c"), "int a = 1;\n").unwrap();
+        run_git(repo.path(), &["add", "demo.c"]);
+        run_git(repo.path(), &["commit", "-m", "init"]);
+
+        fs::write(repo.path().join("demo.c"), "int a = 2;\n").unwrap();
+        run_git(repo.path(), &["add", "demo.c"]);
+        run_git(repo.path(), &["commit", "-m", "update"]);
+
+        let project_cfg = r#"
+[annotate.block_templates.modify]
+start = "// repo-template {reason}"
+end = "// repo-end"
+"#;
+        fs::write(repo.path().join(".xgit").join("config.toml"), project_cfg).unwrap();
+        fs::write(repo.path().join(".xgit").join("runtime.state"), "dirty\n").unwrap();
+
+        let runtime = load_runtime_config(repo.path(), &LoadConfigOptions).unwrap();
+        let catalog = crate::i18n::load_catalog("en-US", repo.path()).unwrap();
+        run(
+            super::AnnotateOptions {
+                latest_commit: true,
+                include_untracked_override: None,
+                reason: Some("from-repo-config".to_string()),
+                reference_kind: Some("bug".to_string()),
+                reference_value: Some("ID-9".to_string()),
+            },
+            &runtime.effective,
+            &catalog,
+            repo.path(),
+        )
+        .unwrap();
+
+        let file = fs::read_to_string(repo.path().join("demo.c")).unwrap();
+        assert!(file.contains("// repo-template from-repo-config"));
+        assert!(file.contains("// repo-end"));
     }
 
     #[test]
@@ -2681,6 +2811,7 @@ end = "//@}"
         run_git(dir.path(), &["init"]);
         run_git(dir.path(), &["config", "user.email", "xgit@test.local"]);
         run_git(dir.path(), &["config", "user.name", "xgit-test"]);
+        fs::create_dir_all(dir.path().join(".xgit")).unwrap();
         dir
     }
 

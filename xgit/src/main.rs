@@ -7,12 +7,31 @@ mod remote;
 mod setup_ui;
 mod version;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap_complete::{
+    generate,
+    shells::{Bash, Fish, PowerShell, Zsh},
+};
 use config::{load_runtime_config, LoadConfigOptions, RuntimeConfig};
 use gitutils::run_git_cmd;
 use i18n::Catalog;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const PROFILE_BLOCK_BEGIN: &str = "# >>> xgit completion (managed) >>>";
+const PROFILE_BLOCK_END: &str = "# <<< xgit completion (managed) <<<";
+
+#[derive(Debug, Clone)]
+struct CompletionInstallPlan {
+    shell: String,
+    script_target_path: PathBuf,
+    profile_path: Option<PathBuf>,
+    profile_lines: Vec<String>,
+}
 
 fn main() -> Result<()> {
     env_logger::init();
@@ -40,6 +59,7 @@ fn main() -> Result<()> {
         Some(("annotate", sub)) => execute_annotate(sub, &catalog, &runtime, &cwd)?,
         Some(("reset", sub)) => execute_reset(sub, &catalog)?,
         Some(("checkout-remote", sub)) => execute_checkout_remote(sub, &catalog)?,
+        Some(("completion", sub)) => execute_completion(sub, &catalog, &runtime)?,
         _ => {
             command.print_help()?;
             println!();
@@ -190,6 +210,23 @@ fn build_runtime_command(catalog: &Catalog, runtime: &RuntimeConfig) -> Command 
                         .num_args(1)
                         .value_name("LOCAL_BRANCH")
                         .help(catalog.t("cmd.checkout_remote.arg.local_branch.help")),
+                ),
+        )
+        .subcommand(
+            Command::new("completion")
+                .about(catalog.t("cmd.completion.about"))
+                .arg(
+                    Arg::new("install")
+                        .long("install")
+                        .action(ArgAction::SetTrue)
+                        .help(catalog.t("cmd.completion.arg.install.help")),
+                )
+                .arg(
+                    Arg::new("shell")
+                        .num_args(1)
+                        .required_unless_present("install")
+                        .value_name("SHELL")
+                        .help(catalog.t("cmd.completion.arg.shell.help")),
                 ),
         )
 }
@@ -418,6 +455,277 @@ fn execute_checkout_remote(sub: &ArgMatches, catalog: &Catalog) -> Result<()> {
     Ok(())
 }
 
+fn execute_completion(sub: &ArgMatches, catalog: &Catalog, runtime: &RuntimeConfig) -> Result<()> {
+    if sub.get_flag("install") {
+        return execute_completion_install(sub, catalog, runtime);
+    }
+
+    let shell = sub
+        .get_one::<String>("shell")
+        .expect("required by clap");
+    let script = generate_completion_script(shell, catalog, runtime)?;
+    print!("{script}");
+    Ok(())
+}
+
+fn execute_completion_install(
+    sub: &ArgMatches,
+    catalog: &Catalog,
+    runtime: &RuntimeConfig,
+) -> Result<()> {
+    let shell = detect_current_shell()
+        .or_else(|| sub.get_one::<String>("shell").map(|value| value.to_ascii_lowercase()))
+        .ok_or_else(|| anyhow!("{}", catalog.t("error.completion.detect_shell_failed")))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("{}", catalog.t("error.completion.detect_shell_failed")))?;
+    let plan = build_completion_install_plan(&shell, &home)?;
+    let script = generate_completion_script(&plan.shell, catalog, runtime)?;
+    let temp_script_path = write_completion_temp_script(&plan.shell, &script)?;
+
+    for line in build_completion_install_preview_lines(catalog, &plan, &temp_script_path) {
+        println!("{line}");
+    }
+
+    let confirmed = prompt_completion_install_confirm(catalog)?;
+    let installed = finalize_completion_install(&plan, &script, confirmed)?;
+    if installed {
+        println!(
+            "{}",
+            catalog.tf(
+                "status.completion.install.done",
+                &[("shell", plan.shell.clone())]
+            )
+        );
+    } else {
+        println!("{}", catalog.t("status.completion.install.cancelled"));
+    }
+    Ok(())
+}
+
+fn generate_completion_script(
+    shell: &str,
+    catalog: &Catalog,
+    runtime: &RuntimeConfig,
+) -> Result<String> {
+    let normalized_shell = shell.to_lowercase();
+    let mut command = build_runtime_command(catalog, runtime);
+    let mut buffer = Vec::<u8>::new();
+    match normalized_shell.as_str() {
+        "bash" => generate(Bash, &mut command, "xgit", &mut buffer),
+        "zsh" => generate(Zsh, &mut command, "xgit", &mut buffer),
+        "fish" => generate(Fish, &mut command, "xgit", &mut buffer),
+        "powershell" | "pwsh" => generate(PowerShell, &mut command, "xgit", &mut buffer),
+        _ => {
+            bail!(
+                "{}",
+                catalog.tf(
+                    "error.completion.unsupported_shell",
+                    &[("shell", normalized_shell)]
+                )
+            );
+        }
+    }
+    Ok(String::from_utf8_lossy(&buffer).to_string())
+}
+
+fn build_completion_install_plan(shell: &str, home: &Path) -> Result<CompletionInstallPlan> {
+    let normalized = shell.to_ascii_lowercase();
+    match normalized.as_str() {
+        "zsh" => Ok(CompletionInstallPlan {
+            shell: "zsh".to_string(),
+            script_target_path: home.join(".xgit").join("completions").join("_xgit"),
+            profile_path: Some(home.join(".zshrc")),
+            profile_lines: vec![
+                "fpath=(~/.xgit/completions $fpath)".to_string(),
+                "autoload -U compinit && compinit".to_string(),
+            ],
+        }),
+        "bash" => Ok(CompletionInstallPlan {
+            shell: "bash".to_string(),
+            script_target_path: home.join(".xgit").join("completions").join("xgit.bash"),
+            profile_path: Some(preferred_bash_profile_path(home)),
+            profile_lines: vec!["source ~/.xgit/completions/xgit.bash".to_string()],
+        }),
+        "fish" => Ok(CompletionInstallPlan {
+            shell: "fish".to_string(),
+            script_target_path: home
+                .join(".config")
+                .join("fish")
+                .join("completions")
+                .join("xgit.fish"),
+            profile_path: None,
+            profile_lines: Vec::new(),
+        }),
+        "powershell" | "pwsh" => Ok(CompletionInstallPlan {
+            shell: "powershell".to_string(),
+            script_target_path: home.join(".xgit").join("completions").join("xgit.ps1"),
+            profile_path: Some(
+                home.join(".config")
+                    .join("powershell")
+                    .join("Microsoft.PowerShell_profile.ps1"),
+            ),
+            profile_lines: vec![". \"$HOME/.xgit/completions/xgit.ps1\"".to_string()],
+        }),
+        _ => bail!("unsupported install shell: {normalized}"),
+    }
+}
+
+fn preferred_bash_profile_path(home: &Path) -> PathBuf {
+    for candidate in [".bashrc", ".bash_profile", ".profile"] {
+        let path = home.join(candidate);
+        if path.exists() {
+            return path;
+        }
+    }
+    home.join(".bashrc")
+}
+
+fn detect_current_shell() -> Option<String> {
+    let shell_path = std::env::var("SHELL").ok()?;
+    infer_shell_from_path(&shell_path)
+}
+
+fn infer_shell_from_path(shell_path: &str) -> Option<String> {
+    let shell_name = Path::new(shell_path)
+        .file_name()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    match shell_name.as_str() {
+        "zsh" => Some("zsh".to_string()),
+        "bash" => Some("bash".to_string()),
+        "fish" => Some("fish".to_string()),
+        "pwsh" | "powershell" => Some("powershell".to_string()),
+        _ => None,
+    }
+}
+
+fn write_completion_temp_script(shell: &str, script: &str) -> Result<PathBuf> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("xgit-completion-{shell}-{ts}.tmp"));
+    fs::write(&path, script)?;
+    Ok(path)
+}
+
+fn build_completion_install_preview_lines(
+    catalog: &Catalog,
+    plan: &CompletionInstallPlan,
+    temp_script_path: &Path,
+) -> Vec<String> {
+    let mut lines = vec![
+        catalog.tf(
+            "status.completion.install.detected_shell",
+            &[("shell", plan.shell.clone())],
+        ),
+        catalog.tf(
+            "status.completion.install.temp_script",
+            &[("path", temp_script_path.display().to_string())],
+        ),
+        catalog.tf(
+            "status.completion.install.target_script",
+            &[("path", plan.script_target_path.display().to_string())],
+        ),
+    ];
+
+    if let Some(profile_path) = &plan.profile_path {
+        lines.push(catalog.tf(
+            "status.completion.install.target_profile",
+            &[("path", profile_path.display().to_string())],
+        ));
+        for line in &plan.profile_lines {
+            lines.push(
+                catalog.tf("status.completion.install.managed_line", &[("line", line.clone())]),
+            );
+        }
+    } else {
+        lines.push(catalog.t("status.completion.install.target_profile_none"));
+    }
+    lines
+}
+
+fn prompt_completion_install_confirm(catalog: &Catalog) -> Result<bool> {
+    print!("{} [y/N]: ", catalog.t("status.completion.install.confirm"));
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "Y" | "y"))
+}
+
+fn finalize_completion_install(
+    plan: &CompletionInstallPlan,
+    script: &str,
+    confirmed: bool,
+) -> Result<bool> {
+    if !confirmed {
+        return Ok(false);
+    }
+    install_completion_artifacts(plan, script)?;
+    Ok(true)
+}
+
+fn install_completion_artifacts(plan: &CompletionInstallPlan, script: &str) -> Result<()> {
+    if let Some(parent) = plan.script_target_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&plan.script_target_path, script)?;
+
+    if let Some(profile_path) = &plan.profile_path {
+        let profile_block = build_managed_profile_block(&plan.profile_lines);
+        if let Some(parent) = profile_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let existing = fs::read_to_string(profile_path).unwrap_or_default();
+        let (next_content, changed) = replace_or_append_managed_block(&existing, &profile_block);
+        if changed {
+            fs::write(profile_path, next_content)?;
+        }
+    }
+    Ok(())
+}
+
+fn build_managed_profile_block(profile_lines: &[String]) -> String {
+    let mut lines = Vec::<String>::new();
+    lines.push(PROFILE_BLOCK_BEGIN.to_string());
+    lines.extend(profile_lines.iter().cloned());
+    lines.push(PROFILE_BLOCK_END.to_string());
+    lines.join("\n")
+}
+
+fn replace_or_append_managed_block(content: &str, managed_block: &str) -> (String, bool) {
+    let mut normalized_block = managed_block.to_string();
+    if !normalized_block.ends_with('\n') {
+        normalized_block.push('\n');
+    }
+
+    if let Some(start) = content.find(PROFILE_BLOCK_BEGIN) {
+        if let Some(end_rel) = content[start..].find(PROFILE_BLOCK_END) {
+            let end = start + end_rel + PROFILE_BLOCK_END.len();
+            let mut next = String::new();
+            next.push_str(&content[..start]);
+            if !next.is_empty() && !next.ends_with('\n') {
+                next.push('\n');
+            }
+            next.push_str(&normalized_block);
+            let mut tail = content[end..].to_string();
+            while tail.starts_with('\n') && next.ends_with('\n') {
+                tail.remove(0);
+            }
+            next.push_str(&tail);
+            let changed = next != content;
+            return (next, changed);
+        }
+    }
+
+    let mut next = content.to_string();
+    if !next.is_empty() && !next.ends_with('\n') {
+        next.push('\n');
+    }
+    next.push_str(&normalized_block);
+    let changed = next != content;
+    (next, changed)
+}
+
 fn resolve_checkout_remote_target(catalog: &Catalog, remote_branch: &str) -> Result<String> {
     let candidates = remote::list_remote_branch_candidates(remote_branch)?;
     if candidates.is_empty() {
@@ -446,10 +754,17 @@ fn resolve_checkout_remote_target(catalog: &Catalog, remote_branch: &str) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::build_runtime_command;
+    use super::{
+        build_completion_install_plan, build_completion_install_preview_lines,
+        build_managed_profile_block, build_runtime_command, finalize_completion_install,
+        generate_completion_script, infer_shell_from_path, replace_or_append_managed_block,
+        PROFILE_BLOCK_BEGIN,
+    };
     use crate::config::{AppConfig, FeaturesConfig, RuntimeConfig, UiConfig};
     use crate::i18n;
+    use std::fs;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[test]
     fn help_shows_disabled_status_for_feature_commands() {
@@ -494,5 +809,140 @@ mod tests {
         let rendered = cmd.render_help().to_string();
         assert!(rendered.contains("reset"));
         assert!(rendered.contains("checkout-remote"));
+    }
+
+    #[test]
+    fn help_lists_completion_command() {
+        let cwd = std::env::current_dir().unwrap();
+        let catalog = i18n::load_catalog("en-US", &cwd).unwrap();
+        let runtime = RuntimeConfig {
+            effective: AppConfig::default(),
+            global_path: PathBuf::from("/tmp/.xgit/config.toml"),
+            project_path: None,
+            git_root: None,
+        };
+
+        let mut cmd = build_runtime_command(&catalog, &runtime);
+        let rendered = cmd.render_help().to_string();
+        assert!(rendered.contains("completion"));
+
+        let completion_help = cmd
+            .find_subcommand_mut("completion")
+            .expect("completion subcommand must exist")
+            .render_help()
+            .to_string();
+        assert!(completion_help.contains("SHELL"));
+    }
+
+    #[test]
+    fn completion_script_generated_for_supported_shell() {
+        let cwd = std::env::current_dir().unwrap();
+        let catalog = i18n::load_catalog("en-US", &cwd).unwrap();
+        let runtime = RuntimeConfig {
+            effective: AppConfig::default(),
+            global_path: PathBuf::from("/tmp/.xgit/config.toml"),
+            project_path: None,
+            git_root: None,
+        };
+
+        let script = generate_completion_script("bash", &catalog, &runtime).unwrap();
+        assert!(script.contains("_xgit"));
+        assert!(script.contains("complete -F"));
+    }
+
+    #[test]
+    fn completion_script_fails_for_unknown_shell() {
+        let cwd = std::env::current_dir().unwrap();
+        let catalog = i18n::load_catalog("en-US", &cwd).unwrap();
+        let runtime = RuntimeConfig {
+            effective: AppConfig::default(),
+            global_path: PathBuf::from("/tmp/.xgit/config.toml"),
+            project_path: None,
+            git_root: None,
+        };
+
+        let err = generate_completion_script("tcsh", &catalog, &runtime).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("unsupported shell"));
+    }
+
+    #[test]
+    fn completion_install_plan_for_zsh_points_to_expected_targets() {
+        let home = TempDir::new().unwrap();
+        let plan = build_completion_install_plan("zsh", home.path()).unwrap();
+        assert_eq!(
+            plan.script_target_path,
+            home.path().join(".xgit").join("completions").join("_xgit")
+        );
+        assert_eq!(plan.profile_path, Some(home.path().join(".zshrc")));
+        assert!(plan
+            .profile_lines
+            .iter()
+            .any(|line| line.contains("compinit")));
+    }
+
+    #[test]
+    fn completion_install_preview_includes_target_paths() {
+        let home = TempDir::new().unwrap();
+        let plan = build_completion_install_plan("bash", home.path()).unwrap();
+        let catalog = i18n::load_catalog("en-US", home.path()).unwrap();
+        let temp_script = home.path().join("xgit-completion-preview.tmp");
+        let lines = build_completion_install_preview_lines(&catalog, &plan, &temp_script);
+        let merged = lines.join("\n");
+        assert!(merged.contains(temp_script.to_string_lossy().as_ref()));
+        assert!(merged.contains(plan.script_target_path.to_string_lossy().as_ref()));
+        assert!(merged.contains(
+            plan.profile_path
+                .as_ref()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        ));
+    }
+
+    #[test]
+    fn completion_install_does_not_write_when_not_confirmed() {
+        let home = TempDir::new().unwrap();
+        let plan = build_completion_install_plan("bash", home.path()).unwrap();
+        let installed = finalize_completion_install(&plan, "demo-script", false).unwrap();
+        assert!(!installed);
+        assert!(!plan.script_target_path.exists());
+        if let Some(profile_path) = &plan.profile_path {
+            assert!(!profile_path.exists());
+        }
+    }
+
+    #[test]
+    fn completion_install_writes_when_confirmed() {
+        let home = TempDir::new().unwrap();
+        let plan = build_completion_install_plan("bash", home.path()).unwrap();
+        let installed = finalize_completion_install(&plan, "demo-script", true).unwrap();
+        assert!(installed);
+        assert!(plan.script_target_path.exists());
+        assert_eq!(fs::read_to_string(&plan.script_target_path).unwrap(), "demo-script");
+        let profile = fs::read_to_string(plan.profile_path.as_ref().unwrap()).unwrap();
+        assert!(profile.contains(PROFILE_BLOCK_BEGIN));
+        assert!(profile.contains("source ~/.xgit/completions/xgit.bash"));
+    }
+
+    #[test]
+    fn managed_profile_block_is_replaced_instead_of_appended() {
+        let first_block = build_managed_profile_block(&["source ~/.xgit/completions/xgit.bash".to_string()]);
+        let second_block = build_managed_profile_block(&["fpath=(~/.xgit/completions $fpath)".to_string()]);
+        let (first_write, _) = replace_or_append_managed_block("", &first_block);
+        let (second_write, _) = replace_or_append_managed_block(&first_write, &second_block);
+        assert_eq!(second_write.matches(PROFILE_BLOCK_BEGIN).count(), 1);
+        assert!(second_write.contains("fpath=(~/.xgit/completions $fpath)"));
+        assert!(!second_write.contains("source ~/.xgit/completions/xgit.bash"));
+    }
+
+    #[test]
+    fn infer_shell_from_path_extracts_supported_shell() {
+        assert_eq!(infer_shell_from_path("/bin/zsh"), Some("zsh".to_string()));
+        assert_eq!(infer_shell_from_path("/usr/bin/bash"), Some("bash".to_string()));
+        assert_eq!(infer_shell_from_path("/opt/homebrew/bin/fish"), Some("fish".to_string()));
+        assert_eq!(
+            infer_shell_from_path("/usr/local/bin/pwsh"),
+            Some("powershell".to_string())
+        );
     }
 }
