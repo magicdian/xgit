@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use regex::Regex;
 use std::collections::HashMap;
 
 fn parse_remotes(output: &str) -> HashMap<String, String> {
@@ -18,6 +17,57 @@ fn parse_remotes(output: &str) -> HashMap<String, String> {
     map
 }
 
+fn first_remote_name(remotes: &HashMap<String, String>) -> Option<String> {
+    let mut names = remotes.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    names.into_iter().next()
+}
+
+fn parse_upstream_remote_branch(output: &str) -> Option<String> {
+    let raw = output.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let mut parts = raw.splitn(2, '/');
+    let remote = parts.next().unwrap_or_default().trim();
+    let branch = parts.next().unwrap_or_default().trim();
+    if remote.is_empty() || branch.is_empty() {
+        None
+    } else {
+        Some(raw.to_string())
+    }
+}
+
+fn split_remote_tracking_ref(reference: &str) -> Option<(&str, &str)> {
+    let trimmed = reference.trim();
+    let mut parts = trimmed.splitn(2, '/');
+    let remote = parts.next()?.trim();
+    let branch = parts.next()?.trim();
+    if remote.is_empty() || branch.is_empty() {
+        return None;
+    }
+    if branch == "HEAD" {
+        return None;
+    }
+    Some((remote, branch))
+}
+
+fn remote_branch_candidates_from_refs(refs_output: &str, remote_branch: &str) -> Vec<String> {
+    let mut candidates: Vec<String> = refs_output
+        .lines()
+        .filter_map(split_remote_tracking_ref)
+        .filter(|(_, branch)| *branch == remote_branch)
+        .map(|(remote, branch)| format!("{remote}/{branch}"))
+        .collect();
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn local_branch_exists_from_refs(refs_output: &str, branch: &str) -> bool {
+    refs_output.lines().any(|line| line.trim() == branch)
+}
+
 pub fn get_current_branch() -> Result<String> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -27,6 +77,15 @@ pub fn get_current_branch() -> Result<String> {
         Err(anyhow!("unable to determine current branch"))
     } else {
         Ok(s)
+    }
+}
+
+pub fn get_checked_out_local_branch() -> Result<Option<String>> {
+    let branch = get_current_branch()?;
+    if branch == "HEAD" {
+        Ok(None)
+    } else {
+        Ok(Some(branch))
     }
 }
 
@@ -56,20 +115,23 @@ pub fn get_branch_remote(branch: &str) -> Result<Option<String>> {
     }
 }
 
-pub fn get_upstream_remote(branch: &str) -> Result<Option<String>> {
+pub fn get_upstream_remote_branch(branch: &str) -> Result<Option<String>> {
     // git rev-parse --abbrev-ref --symbolic-full-name <branch>@{u}
     let key = format!("{}@{{u}}", branch);
-    let res = std::process::Command::new("git")
+    let out = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", &key])
-        .output();
-    if let Ok(out) = res {
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if s.is_empty() {
-            return Ok(None);
-        }
-        // format: remote/branch
-        if let Some(pos) = s.find('/') {
-            let remote = &s[..pos];
+        .output()?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(parse_upstream_remote_branch(&stdout))
+}
+
+pub fn get_upstream_remote(branch: &str) -> Result<Option<String>> {
+    if let Some(full_ref) = get_upstream_remote_branch(branch)? {
+        if let Some(pos) = full_ref.find('/') {
+            let remote = &full_ref[..pos];
             return Ok(Some(remote.to_string()));
         }
     }
@@ -82,38 +144,6 @@ pub fn list_remotes() -> Result<HashMap<String, String>> {
         .output()?;
     let s = String::from_utf8_lossy(&out.stdout).to_string();
     Ok(parse_remotes(&s))
-}
-
-fn url_path_segments(url: &str) -> Vec<String> {
-    // take last 3 path segments from URL
-    // support ssh and https
-    // examples: git@host:owner/repo.git, https://host/owner/repo.git
-    let re = Regex::new(r"[:/](?P<path>[^/:]+/[^/:]+(?:/[^/:]+)?)$").unwrap();
-    if let Some(cap) = re.captures(url) {
-        let path = cap.name("path").unwrap().as_str();
-        return path.split('/').map(|s| s.to_string()).collect();
-    }
-    // fallback: split by / and take last 3
-    url.split('/')
-        .rev()
-        .take(3)
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>()
-}
-
-pub fn are_urls_similar(a: &str, b: &str) -> bool {
-    let asg = url_path_segments(a);
-    let bsg = url_path_segments(b);
-    let mut same = 0;
-    for (i, seg) in asg.iter().rev().enumerate() {
-        if i >= bsg.len() {
-            break;
-        }
-        if seg == &bsg[bsg.len() - 1 - i] {
-            same += 1;
-        }
-    }
-    same >= 1
 }
 
 pub fn branch_has_remote(branch: &str) -> Result<bool> {
@@ -130,6 +160,37 @@ pub fn branch_has_remote(branch: &str) -> Result<bool> {
     Ok(false)
 }
 
+pub fn detect_preferred_remote() -> Result<Option<String>> {
+    if let Ok(r) = std::env::var("XGIT_REMOTE") {
+        if !r.is_empty() {
+            return Ok(Some(r));
+        }
+    }
+    let cfg = std::process::Command::new("git")
+        .args(["config", "--get", "xgit.remote"])
+        .output()?;
+    let cfgs = String::from_utf8_lossy(&cfg.stdout).trim().to_string();
+    if !cfgs.is_empty() {
+        return Ok(Some(cfgs));
+    }
+
+    let remotes = list_remotes()?;
+    if remotes.is_empty() {
+        return Err(anyhow!("no git remotes found"));
+    }
+    if remotes.len() == 1 {
+        return Ok(first_remote_name(&remotes));
+    }
+
+    for candidate in ["origin", "origin2", "upstream"] {
+        if remotes.contains_key(candidate) {
+            return Ok(Some(candidate.to_string()));
+        }
+    }
+
+    Ok(None)
+}
+
 pub fn detect_remote_for_branch(branch: &str) -> Result<String> {
     // 1. branch.<branch>.pushRemote
     if let Some(r) = get_branch_push_remote(branch)? {
@@ -143,48 +204,40 @@ pub fn detect_remote_for_branch(branch: &str) -> Result<String> {
     if let Some(r) = get_upstream_remote(branch)? {
         return Ok(r);
     }
-    // 4. env / git config xgit.remote
-    if let Ok(r) = std::env::var("XGIT_REMOTE") {
-        if !r.is_empty() {
-            return Ok(r);
-        }
-    }
-    let cfg = std::process::Command::new("git")
-        .args(["config", "--get", "xgit.remote"])
-        .output()?;
-    let cfgs = String::from_utf8_lossy(&cfg.stdout).trim().to_string();
-    if !cfgs.is_empty() {
-        return Ok(cfgs);
+
+    // 4. repo preference / env / config
+    if let Some(r) = detect_preferred_remote()? {
+        return Ok(r);
     }
 
-    // 5. auto: git remote -v
+    // 5. auto fallback: first remote name
     let remotes = list_remotes()?;
     if remotes.is_empty() {
         return Err(anyhow!("no git remotes found"));
     }
-    if remotes.len() == 1 {
-        return Ok(remotes.keys().next().unwrap().to_string());
-    }
+    first_remote_name(&remotes).ok_or_else(|| anyhow!("no git remotes found"))
+}
 
-    // If multiple remotes, try to compare to origin URL if present
-    if let Some(origin_url) = remotes.get("origin") {
-        for (name, url) in &remotes {
-            if are_urls_similar(origin_url, url) {
-                return Ok(name.clone());
-            }
-        }
-    }
+pub fn local_branch_exists(branch: &str) -> Result<bool> {
+    let out = std::process::Command::new("git")
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+        .output()?;
+    let refs = String::from_utf8_lossy(&out.stdout);
+    Ok(local_branch_exists_from_refs(&refs, branch))
+}
 
-    // fallback prefer list
-    let prefer = vec!["origin", "origin2", "upstream"];
-    for p in prefer {
-        if remotes.contains_key(p) {
-            return Ok(p.to_string());
-        }
-    }
+pub fn list_remote_branch_candidates(remote_branch: &str) -> Result<Vec<String>> {
+    let out = std::process::Command::new("git")
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/remotes"])
+        .output()?;
+    let refs = String::from_utf8_lossy(&out.stdout);
+    Ok(remote_branch_candidates_from_refs(&refs, remote_branch))
+}
 
-    // last resort: return first
-    Ok(remotes.keys().next().unwrap().to_string())
+pub fn remote_tracking_branch_exists(remote: &str, remote_branch: &str) -> Result<bool> {
+    let target = format!("{remote}/{remote_branch}");
+    let candidates = list_remote_branch_candidates(remote_branch)?;
+    Ok(candidates.iter().any(|candidate| candidate == &target))
 }
 
 pub fn is_remote_gerrit(remote: &str) -> Result<bool> {
@@ -217,9 +270,36 @@ mod tests {
     }
 
     #[test]
-    fn test_url_segments() {
-        let a = "git@host:owner/repo.git";
-        let b = "https://host/owner/repo.git";
-        assert!(are_urls_similar(a, b));
+    fn parse_upstream_remote_branch_supports_full_remote_refs() {
+        assert_eq!(
+            parse_upstream_remote_branch("origin2/feature/test\n"),
+            Some("origin2/feature/test".to_string())
+        );
+        assert_eq!(parse_upstream_remote_branch(""), None);
+        assert_eq!(parse_upstream_remote_branch("origin2"), None);
+    }
+
+    #[test]
+    fn split_remote_tracking_ref_ignores_remote_head_alias() {
+        assert_eq!(
+            split_remote_tracking_ref("origin2/feature/test"),
+            Some(("origin2", "feature/test"))
+        );
+        assert_eq!(split_remote_tracking_ref("origin/HEAD"), None);
+        assert_eq!(split_remote_tracking_ref(""), None);
+    }
+
+    #[test]
+    fn remote_branch_candidates_and_local_existence_from_refs() {
+        let remote_refs = "origin/HEAD\norigin/main\norigin2/main\norigin2/feature/test\n";
+        let candidates = remote_branch_candidates_from_refs(remote_refs, "main");
+        assert_eq!(
+            candidates,
+            vec!["origin/main".to_string(), "origin2/main".to_string()]
+        );
+
+        let local_refs = "main\nfeature/test\n";
+        assert!(local_branch_exists_from_refs(local_refs, "main"));
+        assert!(!local_branch_exists_from_refs(local_refs, "missing"));
     }
 }

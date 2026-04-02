@@ -38,6 +38,8 @@ fn main() -> Result<()> {
         Some(("push", sub)) => execute_push(sub, &catalog, &runtime)?,
         Some(("setup", sub)) => execute_setup(sub, &catalog, &runtime)?,
         Some(("annotate", sub)) => execute_annotate(sub, &catalog, &runtime, &cwd)?,
+        Some(("reset", sub)) => execute_reset(sub, &catalog)?,
+        Some(("checkout-remote", sub)) => execute_checkout_remote(sub, &catalog)?,
         _ => {
             command.print_help()?;
             println!();
@@ -163,6 +165,31 @@ fn build_runtime_command(catalog: &Catalog, runtime: &RuntimeConfig) -> Command 
                         .num_args(1)
                         .value_name("VALUE")
                         .help(catalog.t("cmd.annotate.arg.reference_value.help")),
+                ),
+        )
+        .subcommand(
+            Command::new("reset").about(catalog.t("cmd.reset.about")).arg(
+                Arg::new("hard")
+                    .long("hard")
+                    .action(ArgAction::SetTrue)
+                    .help(catalog.t("cmd.reset.arg.hard.help")),
+            ),
+        )
+        .subcommand(
+            Command::new("checkout-remote")
+                .about(catalog.t("cmd.checkout_remote.about"))
+                .arg(
+                    Arg::new("remote-branch")
+                        .num_args(1)
+                        .required(true)
+                        .value_name("REMOTE_BRANCH")
+                        .help(catalog.t("cmd.checkout_remote.arg.remote_branch.help")),
+                )
+                .arg(
+                    Arg::new("local-branch")
+                        .num_args(1)
+                        .value_name("LOCAL_BRANCH")
+                        .help(catalog.t("cmd.checkout_remote.arg.local_branch.help")),
                 ),
         )
 }
@@ -312,6 +339,111 @@ fn execute_annotate(
     annotate::run(options, &runtime.effective, catalog, cwd)
 }
 
+fn execute_reset(sub: &ArgMatches, catalog: &Catalog) -> Result<()> {
+    if which::which("git").is_err() {
+        bail!("{}", catalog.t("error.git.not_found"));
+    }
+
+    let current_branch = remote::get_checked_out_local_branch()?
+        .ok_or_else(|| anyhow::anyhow!(catalog.t("error.reset.detached_head")))?;
+    let upstream = remote::get_upstream_remote_branch(&current_branch)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            catalog.tf("error.reset.no_upstream", &[("branch", current_branch.clone())])
+        )
+    })?;
+
+    let mut args: Vec<String> = vec!["reset".to_string()];
+    if sub.get_flag("hard") {
+        args.push("--hard".to_string());
+    }
+    args.push(upstream);
+
+    let status = run_git_cmd(&args)?;
+    if !status.success() {
+        bail!(
+            "{}",
+            catalog.tf("error.reset.failed", &[("status", status.to_string())])
+        );
+    }
+    Ok(())
+}
+
+fn execute_checkout_remote(sub: &ArgMatches, catalog: &Catalog) -> Result<()> {
+    if which::which("git").is_err() {
+        bail!("{}", catalog.t("error.git.not_found"));
+    }
+
+    let remote_branch = sub
+        .get_one::<String>("remote-branch")
+        .expect("required by clap")
+        .to_string();
+    let local_branch = sub
+        .get_one::<String>("local-branch")
+        .cloned()
+        .unwrap_or_else(|| remote_branch.clone());
+
+    if remote::local_branch_exists(&local_branch)? {
+        bail!(
+            "{}",
+            catalog.tf(
+                "error.checkout_remote.local_exists",
+                &[("branch", local_branch.clone())]
+            )
+        );
+    }
+
+    let target = if let Some(preferred_remote) = remote::detect_preferred_remote()? {
+        if remote::remote_tracking_branch_exists(&preferred_remote, &remote_branch)? {
+            format!("{preferred_remote}/{remote_branch}")
+        } else {
+            resolve_checkout_remote_target(catalog, &remote_branch)?
+        }
+    } else {
+        resolve_checkout_remote_target(catalog, &remote_branch)?
+    };
+
+    let args = vec![
+        "checkout".to_string(),
+        "-b".to_string(),
+        local_branch,
+        target,
+    ];
+    let status = run_git_cmd(&args)?;
+    if !status.success() {
+        bail!(
+            "{}",
+            catalog.tf("error.checkout_remote.failed", &[("status", status.to_string())])
+        );
+    }
+    Ok(())
+}
+
+fn resolve_checkout_remote_target(catalog: &Catalog, remote_branch: &str) -> Result<String> {
+    let candidates = remote::list_remote_branch_candidates(remote_branch)?;
+    if candidates.is_empty() {
+        bail!(
+            "{}",
+            catalog.tf(
+                "error.checkout_remote.remote_not_found",
+                &[("branch", remote_branch.to_string())]
+            )
+        );
+    }
+    if candidates.len() > 1 {
+        bail!(
+            "{}",
+            catalog.tf(
+                "error.checkout_remote.remote_ambiguous",
+                &[
+                    ("branch", remote_branch.to_string()),
+                    ("candidates", candidates.join(", "))
+                ]
+            )
+        );
+    }
+    Ok(candidates[0].clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_runtime_command;
@@ -345,5 +477,22 @@ mod tests {
         assert!(rendered.contains("(disabled)"));
         assert!(rendered.contains("setup"));
         assert!(!rendered.contains("--lang"));
+    }
+
+    #[test]
+    fn help_lists_remote_branch_operations() {
+        let cwd = std::env::current_dir().unwrap();
+        let catalog = i18n::load_catalog("en-US", &cwd).unwrap();
+        let runtime = RuntimeConfig {
+            effective: AppConfig::default(),
+            global_path: PathBuf::from("/tmp/.xgit/config.toml"),
+            project_path: None,
+            git_root: None,
+        };
+
+        let mut cmd = build_runtime_command(&catalog, &runtime);
+        let rendered = cmd.render_help().to_string();
+        assert!(rendered.contains("reset"));
+        assert!(rendered.contains("checkout-remote"));
     }
 }

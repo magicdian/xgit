@@ -1,6 +1,6 @@
 [package]
 name = "xgit"
-version = "2604.1.4"
+version = "2604.2.1"
 edition = "2021"
 
 [dependencies]

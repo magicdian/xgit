@@ -3,12 +3,14 @@ xgit — 可配置的 Git 开发辅助工具
 ## 版本维护
 - 单一版本来源：`Cargo.toml` 的 `[package].version`
 - CLI 版本输出（`xgit --version`）直接读取 Cargo 包版本
-- 推荐可以使用日期化命名约定 `YYMM.DD.BuildNumber`，但必须保持 Cargo 兼容；当前落地写法：`2604.1.4`（语义对应 `2604.01.4`）
+- 推荐可以使用日期化命名约定 `YYMM.DD.BuildNumber`，但必须保持 Cargo 兼容；当前落地写法：`2604.2.1`（语义对应 `2604.02.1`）
 
 ## 主要能力
 - `push`：自动识别 remote 并执行推送
 - `setup`：基于 ratatui 的 menuconfig 风格配置界面
 - `annotate`：基于 staged/latest-commit 改动生成规范化注释块预览
+- `reset`：将当前本地分支重置到其 upstream 跟踪分支
+- `checkout-remote`：从远端跟踪分支创建本地分支
 
 ## 配置位置与优先级
 - 全局配置：`~/.xgit/config.toml`
@@ -42,6 +44,26 @@ xgit — 可配置的 Git 开发辅助工具
   - `--no-thin`
   - `--force-with-lease`
   - `--dry-run`
+
+## reset 用法
+- `xgit reset`
+- `xgit reset --hard`
+- 说明：
+  - 仅在当前已切到本地分支且该分支已配置 upstream tracking branch 时可执行
+  - `--hard` 会映射到 `git reset --hard <upstream>`，会覆盖工作区与暂存区内容，请谨慎使用
+  - 若当前为 detached HEAD 或没有 upstream，会直接拒绝执行并给出提示
+
+## checkout-remote 用法
+- `xgit checkout-remote <remote-branch>`
+- `xgit checkout-remote <remote-branch> <local-branch>`
+- 示例：
+  - `xgit checkout-remote 8676_os6_xpdev`
+  - `xgit checkout-remote 8676_os6_xpdev 8676_os6_xpdev_clean`
+- 说明：
+  - 只传一个参数时，默认本地分支名与远端分支名相同
+  - 命令会先检查本地目标分支是否存在；若存在则拒绝执行
+  - remote 解析采用“首选 remote（`XGIT_REMOTE` / `git config xgit.remote` / 常见默认 remote）优先，找不到时回退候选扫描”的策略
+  - 若候选 remote branch 不存在或存在多个同名候选，命令会报错而不是静默选择
 
 ## 注释规范化流程
 默认使用 staged 改动，也可以显式指定 latest-commit：

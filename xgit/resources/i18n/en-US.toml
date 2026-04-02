@@ -159,6 +159,13 @@ cmd.annotate.arg.reason.help = "Reason for this normalization run"
 cmd.annotate.arg.reference_kind.help = "Reference kind (for example bug/req)"
 cmd.annotate.arg.reference_value.help = "Reference value for this run"
 
+cmd.reset.about = "Reset current branch to its upstream tracking branch"
+cmd.reset.arg.hard.help = "Pass --hard to git reset (destructive)"
+
+cmd.checkout_remote.about = "Create a local branch from a remote tracking branch"
+cmd.checkout_remote.arg.remote_branch.help = "Remote branch name to locate"
+cmd.checkout_remote.arg.local_branch.help = "Optional local branch name (defaults to remote branch name)"
+
 error.git.not_found = "git not found in PATH"
 error.branch.no_remote = "Current branch '{branch}' has no remote tracking. Run `git push -u <remote> {branch}` first, or use `xgit push <branch>`."
 error.push.failed = "git push failed with status: {status}"
@@ -172,6 +179,13 @@ error.annotate.latest_commit_merge = "latest-commit mode does not support merge 
 error.annotate.latest_commit_dirty = "latest-commit mode requires a clean working tree."
 error.annotate.staged_unstaged_conflict = "Staged mode cannot safely rewrite {path} because unstaged changes exist. Please commit/stage/clean this file first."
 error.annotate.normalize_failed = "Cannot safely rebuild annotation blocks for {path}. Please verify existing block boundaries and template compatibility."
+error.reset.detached_head = "reset command requires a checked-out local branch. Please checkout a local branch first."
+error.reset.no_upstream = "Current branch '{branch}' has no upstream tracking branch."
+error.reset.failed = "git reset failed with status: {status}"
+error.checkout_remote.local_exists = "Local branch '{branch}' already exists."
+error.checkout_remote.remote_not_found = "Remote branch '{branch}' was not found in any remote tracking refs."
+error.checkout_remote.remote_ambiguous = "Remote branch '{branch}' is ambiguous. Candidates: {candidates}"
+error.checkout_remote.failed = "git checkout failed with status: {status}"
 
 prompt.annotate.reason = "Enter reason"
 prompt.annotate.reference_kind = "Enter reference kind"

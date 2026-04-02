@@ -159,6 +159,13 @@ cmd.annotate.arg.reason.help = "本次规范化原因"
 cmd.annotate.arg.reference_kind.help = "引用类型（例如 bug/req）"
 cmd.annotate.arg.reference_value.help = "本次引用值"
 
+cmd.reset.about = "将当前分支重置到其 upstream 跟踪分支"
+cmd.reset.arg.hard.help = "为 git reset 传递 --hard（危险操作）"
+
+cmd.checkout_remote.about = "基于远端跟踪分支创建本地分支"
+cmd.checkout_remote.arg.remote_branch.help = "要定位的远端分支名"
+cmd.checkout_remote.arg.local_branch.help = "可选本地分支名（默认与远端分支同名）"
+
 error.git.not_found = "PATH 中未找到 git"
 error.branch.no_remote = "当前分支 '{branch}' 没有关联远端分支。请先执行 `git push -u <remote> {branch}`，或使用 `xgit push <branch>` 指定分支。"
 error.push.failed = "git push 失败，状态：{status}"
@@ -172,6 +179,13 @@ error.annotate.latest_commit_merge = "latest-commit 模式暂不支持 merge com
 error.annotate.latest_commit_dirty = "latest-commit 模式要求工作区为干净状态。"
 error.annotate.staged_unstaged_conflict = "staged 模式无法安全改写 {path}：该文件仍有未暂存修改。请先处理该文件的工作区状态。"
 error.annotate.normalize_failed = "无法安全重建 {path} 的注释块。请检查已有注释结构是否完整且与当前模板兼容。"
+error.reset.detached_head = "reset 命令要求当前已切换到本地分支，请先 checkout 到本地分支。"
+error.reset.no_upstream = "当前分支 '{branch}' 没有关联 upstream 跟踪分支。"
+error.reset.failed = "git reset 失败，状态：{status}"
+error.checkout_remote.local_exists = "本地分支 '{branch}' 已存在。"
+error.checkout_remote.remote_not_found = "在所有远端跟踪分支中都未找到 '{branch}'。"
+error.checkout_remote.remote_ambiguous = "远端分支 '{branch}' 存在歧义，候选：{candidates}"
+error.checkout_remote.failed = "git checkout 失败，状态：{status}"
 
 prompt.annotate.reason = "请输入 reason"
 prompt.annotate.reference_kind = "请输入引用类型"
