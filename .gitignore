@@ -5,3 +5,7 @@ dist/
 *.swp
 *.swo
 *~
+
+# IDE files
+.idea/
+*.iml

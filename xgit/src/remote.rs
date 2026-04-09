@@ -1,6 +1,14 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchUpstreamMapping {
+    pub local_branch: String,
+    pub remote: String,
+    pub remote_branch: String,
+    pub full_upstream_ref: String,
+}
+
 fn parse_remotes(output: &str) -> HashMap<String, String> {
     // parse `git remote -v` lines
     // format: name\turl (fetch)
@@ -36,6 +44,28 @@ fn parse_upstream_remote_branch(output: &str) -> Option<String> {
     } else {
         Some(raw.to_string())
     }
+}
+
+fn parse_branch_upstream_mapping(
+    local_branch: &str,
+    full_upstream_ref: &str,
+) -> Option<BranchUpstreamMapping> {
+    let trimmed = full_upstream_ref.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut parts = trimmed.splitn(2, '/');
+    let remote = parts.next()?.trim();
+    let remote_branch = parts.next()?.trim();
+    if remote.is_empty() || remote_branch.is_empty() {
+        return None;
+    }
+    Some(BranchUpstreamMapping {
+        local_branch: local_branch.to_string(),
+        remote: remote.to_string(),
+        remote_branch: remote_branch.to_string(),
+        full_upstream_ref: trimmed.to_string(),
+    })
 }
 
 fn split_remote_tracking_ref(reference: &str) -> Option<(&str, &str)> {
@@ -128,14 +158,13 @@ pub fn get_upstream_remote_branch(branch: &str) -> Result<Option<String>> {
     Ok(parse_upstream_remote_branch(&stdout))
 }
 
+pub fn get_branch_upstream_mapping(branch: &str) -> Result<Option<BranchUpstreamMapping>> {
+    Ok(get_upstream_remote_branch(branch)?
+        .and_then(|full_upstream_ref| parse_branch_upstream_mapping(branch, &full_upstream_ref)))
+}
+
 pub fn get_upstream_remote(branch: &str) -> Result<Option<String>> {
-    if let Some(full_ref) = get_upstream_remote_branch(branch)? {
-        if let Some(pos) = full_ref.find('/') {
-            let remote = &full_ref[..pos];
-            return Ok(Some(remote.to_string()));
-        }
-    }
-    Ok(None)
+    Ok(get_branch_upstream_mapping(branch)?.map(|mapping| mapping.remote))
 }
 
 pub fn list_remotes() -> Result<HashMap<String, String>> {
@@ -277,6 +306,23 @@ mod tests {
         );
         assert_eq!(parse_upstream_remote_branch(""), None);
         assert_eq!(parse_upstream_remote_branch("origin2"), None);
+    }
+
+    #[test]
+    fn parse_branch_upstream_mapping_extracts_remote_and_branch() {
+        let mapping =
+            parse_branch_upstream_mapping("feature/local-clean", "origin2/feature/remote-target")
+                .unwrap();
+        assert_eq!(mapping.local_branch, "feature/local-clean");
+        assert_eq!(mapping.remote, "origin2");
+        assert_eq!(mapping.remote_branch, "feature/remote-target");
+        assert_eq!(mapping.full_upstream_ref, "origin2/feature/remote-target");
+    }
+
+    #[test]
+    fn parse_branch_upstream_mapping_rejects_invalid_input() {
+        assert_eq!(parse_branch_upstream_mapping("main", ""), None);
+        assert_eq!(parse_branch_upstream_mapping("main", "origin2"), None);
     }
 
     #[test]

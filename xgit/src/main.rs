@@ -261,8 +261,9 @@ fn execute_push(sub: &ArgMatches, catalog: &Catalog, runtime: &RuntimeConfig) ->
         bail!("{}", catalog.t("error.git.not_found"));
     }
 
-    let branch = match sub.get_one::<String>("branch") {
-        Some(value) => value.clone(),
+    let explicit_branch = sub.get_one::<String>("branch").cloned();
+    let selection_branch = match explicit_branch.clone() {
+        Some(value) => value,
         None => {
             let current = remote::get_current_branch()?;
             if !remote::branch_has_remote(&current)? {
@@ -274,12 +275,17 @@ fn execute_push(sub: &ArgMatches, catalog: &Catalog, runtime: &RuntimeConfig) ->
             current
         }
     };
+    let upstream_mapping = if explicit_branch.is_none() {
+        remote::get_branch_upstream_mapping(&selection_branch)?
+    } else {
+        None
+    };
 
     let forced_remote = sub.get_one::<String>("remote").cloned();
     let remote = if let Some(value) = forced_remote {
         value
     } else {
-        remote::detect_remote_for_branch(&branch)?
+        remote::detect_remote_for_branch(&selection_branch)?
     };
 
     let force_gerrit = sub.get_flag("gerrit");
@@ -288,10 +294,16 @@ fn execute_push(sub: &ArgMatches, catalog: &Catalog, runtime: &RuntimeConfig) ->
     } else {
         remote::is_remote_gerrit(&remote)?
     };
+    let target_branch = resolve_push_target_branch(
+        explicit_branch.as_deref(),
+        &selection_branch,
+        is_gerrit,
+        upstream_mapping.as_ref(),
+    );
     let refspec = if is_gerrit {
-        format!("HEAD:refs/for/{branch}")
+        format!("HEAD:refs/for/{target_branch}")
     } else {
-        format!("HEAD:{branch}")
+        format!("HEAD:{target_branch}")
     };
 
     let mut args: Vec<String> = vec!["push".to_string()];
@@ -408,17 +420,19 @@ fn execute_reset(sub: &ArgMatches, catalog: &Catalog, runtime: &RuntimeConfig) -
 
     let current_branch = remote::get_checked_out_local_branch()?
         .ok_or_else(|| anyhow::anyhow!(catalog.t("error.reset.detached_head")))?;
-    let upstream = remote::get_upstream_remote_branch(&current_branch)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            catalog.tf("error.reset.no_upstream", &[("branch", current_branch.clone())])
-        )
-    })?;
+    let upstream_mapping =
+        remote::get_branch_upstream_mapping(&current_branch)?.ok_or_else(|| {
+            anyhow::anyhow!(catalog.tf(
+                "error.reset.no_upstream",
+                &[("branch", current_branch.clone())]
+            ))
+        })?;
 
     let mut args: Vec<String> = vec!["reset".to_string()];
     if sub.get_flag("hard") {
         args.push("--hard".to_string());
     }
-    args.push(upstream);
+    args.push(resolve_reset_target_ref(&upstream_mapping));
 
     let status = run_git_cmd(&args)?;
     if !status.success() {
@@ -488,7 +502,10 @@ fn execute_checkout_remote(
     if !status.success() {
         bail!(
             "{}",
-            catalog.tf("error.checkout_remote.failed", &[("status", status.to_string())])
+            catalog.tf(
+                "error.checkout_remote.failed",
+                &[("status", status.to_string())]
+            )
         );
     }
     Ok(())
@@ -509,9 +526,7 @@ fn execute_completion(sub: &ArgMatches, catalog: &Catalog, runtime: &RuntimeConf
         return execute_completion_install(sub, catalog, runtime);
     }
 
-    let shell = sub
-        .get_one::<String>("shell")
-        .expect("required by clap");
+    let shell = sub.get_one::<String>("shell").expect("required by clap");
     let script = generate_completion_script(shell, catalog, runtime)?;
     print!("{script}");
     Ok(())
@@ -523,9 +538,13 @@ fn execute_completion_install(
     runtime: &RuntimeConfig,
 ) -> Result<()> {
     let shell = detect_current_shell()
-        .or_else(|| sub.get_one::<String>("shell").map(|value| value.to_ascii_lowercase()))
+        .or_else(|| {
+            sub.get_one::<String>("shell")
+                .map(|value| value.to_ascii_lowercase())
+        })
         .ok_or_else(|| anyhow!("{}", catalog.t("error.completion.detect_shell_failed")))?;
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("{}", catalog.t("error.completion.detect_shell_failed")))?;
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow!("{}", catalog.t("error.completion.detect_shell_failed")))?;
     let plan = build_completion_install_plan(&shell, &home)?;
     let script = generate_completion_script(&plan.shell, catalog, runtime)?;
     let temp_script_path = write_completion_temp_script(&plan.shell, &script)?;
@@ -683,9 +702,10 @@ fn build_completion_install_preview_lines(
             &[("path", profile_path.display().to_string())],
         ));
         for line in &plan.profile_lines {
-            lines.push(
-                catalog.tf("status.completion.install.managed_line", &[("line", line.clone())]),
-            );
+            lines.push(catalog.tf(
+                "status.completion.install.managed_line",
+                &[("line", line.clone())],
+            ));
         }
     } else {
         lines.push(catalog.t("status.completion.install.target_profile_none"));
@@ -801,16 +821,38 @@ fn resolve_checkout_remote_target(catalog: &Catalog, remote_branch: &str) -> Res
     Ok(candidates[0].clone())
 }
 
+fn resolve_push_target_branch(
+    explicit_branch: Option<&str>,
+    selection_branch: &str,
+    is_gerrit: bool,
+    upstream_mapping: Option<&remote::BranchUpstreamMapping>,
+) -> String {
+    if let Some(branch) = explicit_branch {
+        return branch.to_string();
+    }
+    if is_gerrit {
+        if let Some(mapping) = upstream_mapping {
+            return mapping.remote_branch.clone();
+        }
+    }
+    selection_branch.to_string()
+}
+
+fn resolve_reset_target_ref(upstream_mapping: &remote::BranchUpstreamMapping) -> String {
+    upstream_mapping.full_upstream_ref.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         build_completion_install_plan, build_completion_install_preview_lines,
         build_managed_profile_block, build_runtime_command, finalize_completion_install,
         generate_completion_script, infer_shell_from_path, replace_or_append_managed_block,
-        PROFILE_BLOCK_BEGIN,
+        resolve_push_target_branch, resolve_reset_target_ref, PROFILE_BLOCK_BEGIN,
     };
     use crate::config::{AppConfig, FeaturesConfig, RuntimeConfig, UiConfig};
     use crate::i18n;
+    use crate::remote::BranchUpstreamMapping;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -903,6 +945,54 @@ mod tests {
     }
 
     #[test]
+    fn push_target_branch_prefers_upstream_branch_for_gerrit_without_explicit_branch() {
+        let mapping = BranchUpstreamMapping {
+            local_branch: "8676_os6_xpdev_androidB_clean".to_string(),
+            remote: "origin2".to_string(),
+            remote_branch: "8676_os6_xpdev_androidB".to_string(),
+            full_upstream_ref: "origin2/8676_os6_xpdev_androidB".to_string(),
+        };
+
+        let target = resolve_push_target_branch(None, &mapping.local_branch, true, Some(&mapping));
+        assert_eq!(target, "8676_os6_xpdev_androidB");
+    }
+
+    #[test]
+    fn push_target_branch_keeps_explicit_branch_for_gerrit() {
+        let mapping = BranchUpstreamMapping {
+            local_branch: "8676_os6_xpdev_androidB_clean".to_string(),
+            remote: "origin2".to_string(),
+            remote_branch: "8676_os6_xpdev_androidB".to_string(),
+            full_upstream_ref: "origin2/8676_os6_xpdev_androidB".to_string(),
+        };
+
+        let target = resolve_push_target_branch(
+            Some("release_override"),
+            &mapping.local_branch,
+            true,
+            Some(&mapping),
+        );
+        assert_eq!(target, "release_override");
+    }
+
+    #[test]
+    fn push_and_reset_share_same_upstream_mapping_source() {
+        let mapping = BranchUpstreamMapping {
+            local_branch: "8676_os6_xpdev_androidB_clean".to_string(),
+            remote: "origin2".to_string(),
+            remote_branch: "8676_os6_xpdev_androidB".to_string(),
+            full_upstream_ref: "origin2/8676_os6_xpdev_androidB".to_string(),
+        };
+
+        let push_target =
+            resolve_push_target_branch(None, &mapping.local_branch, true, Some(&mapping));
+        let reset_target = resolve_reset_target_ref(&mapping);
+
+        assert_eq!(push_target, "8676_os6_xpdev_androidB");
+        assert_eq!(reset_target, "origin2/8676_os6_xpdev_androidB");
+    }
+
+    #[test]
     fn completion_script_fails_for_unknown_shell() {
         let cwd = std::env::current_dir().unwrap();
         let catalog = i18n::load_catalog("en-US", &cwd).unwrap();
@@ -970,7 +1060,10 @@ mod tests {
         let installed = finalize_completion_install(&plan, "demo-script", true).unwrap();
         assert!(installed);
         assert!(plan.script_target_path.exists());
-        assert_eq!(fs::read_to_string(&plan.script_target_path).unwrap(), "demo-script");
+        assert_eq!(
+            fs::read_to_string(&plan.script_target_path).unwrap(),
+            "demo-script"
+        );
         let profile = fs::read_to_string(plan.profile_path.as_ref().unwrap()).unwrap();
         assert!(profile.contains(PROFILE_BLOCK_BEGIN));
         assert!(profile.contains("source ~/.xgit/completions/xgit.bash"));
@@ -978,8 +1071,10 @@ mod tests {
 
     #[test]
     fn managed_profile_block_is_replaced_instead_of_appended() {
-        let first_block = build_managed_profile_block(&["source ~/.xgit/completions/xgit.bash".to_string()]);
-        let second_block = build_managed_profile_block(&["fpath=(~/.xgit/completions $fpath)".to_string()]);
+        let first_block =
+            build_managed_profile_block(&["source ~/.xgit/completions/xgit.bash".to_string()]);
+        let second_block =
+            build_managed_profile_block(&["fpath=(~/.xgit/completions $fpath)".to_string()]);
         let (first_write, _) = replace_or_append_managed_block("", &first_block);
         let (second_write, _) = replace_or_append_managed_block(&first_write, &second_block);
         assert_eq!(second_write.matches(PROFILE_BLOCK_BEGIN).count(), 1);
@@ -990,8 +1085,14 @@ mod tests {
     #[test]
     fn infer_shell_from_path_extracts_supported_shell() {
         assert_eq!(infer_shell_from_path("/bin/zsh"), Some("zsh".to_string()));
-        assert_eq!(infer_shell_from_path("/usr/bin/bash"), Some("bash".to_string()));
-        assert_eq!(infer_shell_from_path("/opt/homebrew/bin/fish"), Some("fish".to_string()));
+        assert_eq!(
+            infer_shell_from_path("/usr/bin/bash"),
+            Some("bash".to_string())
+        );
+        assert_eq!(
+            infer_shell_from_path("/opt/homebrew/bin/fish"),
+            Some("fish".to_string())
+        );
         assert_eq!(
             infer_shell_from_path("/usr/local/bin/pwsh"),
             Some("powershell".to_string())

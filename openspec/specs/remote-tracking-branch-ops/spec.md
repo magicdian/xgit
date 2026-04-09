@@ -4,7 +4,7 @@
 待定 - 由归档变更 add-xgit-reset-and-checkout-remote 创建。归档后请更新目的。
 ## 需求
 ### 需求:xgit reset 必须以当前分支的 upstream remote branch 为目标
-`xgit reset` 必须仅在当前已切换到本地分支、且该分支存在已关联的 upstream remote branch 时执行，并将该 upstream ref 作为 reset 目标。
+`xgit reset` 必须仅在当前已切换到本地分支、且该分支存在已关联的 upstream remote branch 时执行，并将该 upstream ref 作为 reset 目标；系统必须与 `xgit push` 在同一 tracking 配置下保持一致的本地分支到 remote 分支映射解释。
 
 #### 场景:当前分支跟踪不同名 remote branch 时执行普通 reset
 - **当** 用户当前位于本地分支 `8676_os6_xpdev_clean`
@@ -29,6 +29,13 @@
 - **当** 用户执行 `xgit reset`
 - **那么** 系统必须拒绝执行
 - **并且** 系统必须提示用户先切换到本地分支
+
+#### 场景:与 push 共享同一映射时保持 upstream 目标一致
+- **当** 用户当前位于本地分支 `8676_os6_xpdev_androidB_clean`
+- **并且** 该分支 upstream 为 `origin2/8676_os6_xpdev_androidB`
+- **当** 用户执行 `xgit reset`
+- **那么** 系统必须将 `origin2/8676_os6_xpdev_androidB` 作为 reset 目标
+- **并且** 该 upstream 分支映射必须与同条件下 `xgit push` 推导 `refs/for/8676_os6_xpdev_androidB` 的分支来源一致
 
 ### 需求:xgit checkout-remote 必须支持从 remote branch 创建本地分支
 `xgit checkout-remote` 必须接收一个或两个位置参数，并在目标 remote branch 可解析且本地目标分支不存在时创建本地分支。
