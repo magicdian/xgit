@@ -1,0 +1,31 @@
+> Imported historical task context normalized by Transpec for Trellis-first continuation. Use `.trellis/spec/` as the current source of truth; preserved source artifacts remain for provenance.
+
+## 为什么
+
+当前 `xgit setup` 的帮助栏对用户几乎没有提供有效信息：它不会随着当前选中的菜单项变化，而且现有布局给帮助区分配的高度不足以显示正文，导致帮助框经常呈现为空白。层级菜单已经引入了更多导航路径，如果没有上下文说明和当前可用快捷键提示，用户很难理解当前选项的意义，也难以判断下一步该按什么键。
+
+## 变更内容
+
+- 为设置界面的帮助栏增加“当前选项说明 + 当前可用快捷键”两类上下文内容，而不是只显示固定通用提示。
+- 要求帮助栏根据当前交互状态动态切换内容：
+  - 普通菜单态显示当前高亮项的用途，以及该状态下可用的快捷键。
+  - 文本编辑态显示当前编辑行为的说明和编辑快捷键。
+  - 退出确认态显示确认动作的意义和可用快捷键。
+- 调整设置界面布局，确保帮助栏在默认终端尺寸下始终有可见正文空间，不能只剩边框而没有内容。
+- 为根菜单及常见子菜单项补充可本地化的帮助文案，确保用户在浏览配置项时能看到该项的意义。
+
+## 功能 (Capabilities)
+
+### 新增功能
+
+<!-- 无 -->
+
+### 修改功能
+
+- `interactive-setup`: 设置界面需要为当前高亮项和当前交互状态提供可见、上下文化的帮助内容，并展示对应快捷键。
+
+## 影响
+
+- 受影响代码：`xgit/src/setup_ui.rs` 的帮助内容生成、菜单项元数据与界面布局逻辑。
+- 受影响资源：`xgit/resources/i18n/zh-CN.toml`、`xgit/resources/i18n/en-US.toml` 中的 setup 帮助文案键。
+- 受影响规范：`interactive-setup` 需要新增或修改帮助栏行为相关需求与场景。

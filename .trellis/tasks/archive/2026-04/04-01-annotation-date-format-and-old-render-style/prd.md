@@ -1,0 +1,30 @@
+> Imported historical task context normalized by Transpec for Trellis-first continuation. Use `.trellis/spec/` as the current source of truth; preserved source artifacts remain for provenance.
+
+## 为什么
+
+`xgit annotate` 当前把 `{date}` 渲染成 Unix 时间戳，并把 `modify` / `del` 的旧代码记录混在 `{old}` 占位符和渲染器硬编码回退里。这既不符合团队常见的 `yyyy-mm-dd` 注释规范，也让“是否展示旧代码、以什么风格展示旧代码”无法通过结构化配置稳定表达，用户只能继续堆叠模板技巧或接受固定输出。
+
+## 变更内容
+
+- **BREAKING**: 将 `{date}` 的默认输出从 Unix 时间戳调整为基于系统本地时间的格式化日期文本，默认格式为 `yyyy-mm-dd`。
+- 为注释配置增加独立的日期格式配置，使团队可以统一控制 `{date}` 的渲染格式，而不是把时间戳写死在代码里。
+- 为旧代码记录增加独立的 `annotate.old_code` 渲染策略，支持“不展示旧代码”“按行注释展示旧代码”“按块注释展示旧代码”三类显式风格。
+- 调整 `xgit annotate` 渲染链路，让显式旧代码策略优先于 legacy `{old}` 占位符和兼容回退逻辑，避免重复输出旧代码。
+- 扩展 `xgit setup` 的注释策略栏目，允许用户编辑日期格式和旧代码展示风格及其模式相关字段，而不是要求用户通过 `modify` / `del` 模板手写旧代码语法。
+- 为已有配置提供兼容路径，确保未显式配置新字段的项目仍能沿用当前旧代码记录语义。
+
+## 功能 (Capabilities)
+
+### 新增功能
+<!-- 无 -->
+
+### 修改功能
+- `annotation-normalization`: 注释运行时上下文中的 `{date}` 需要支持格式化输出，旧代码记录需要从隐式模板/兼容分支升级为显式渲染策略。
+- `interactive-setup`: 设置界面的注释策略栏目需要暴露日期格式和旧代码展示策略，而不只是起始模板与结束模板。
+
+## 影响
+
+- `xgit/src/config.rs`、`xgit/config/default.toml` 和配置合并逻辑需要新增 `annotate.date` 与 `annotate.old_code` 的结构化模型。
+- `xgit/src/annotate.rs` 的运行时上下文、`{date}` 展开和旧代码注入逻辑需要调整，并补充显式策略优先级与兼容行为测试。
+- `xgit/src/setup_ui.rs` 及其文案资源需要增加日期格式和旧代码策略字段，以及模式相关的编辑入口。
+- 可能需要增加日期格式化依赖或辅助模块，以便基于系统本地时间输出稳定的格式化日期文本。

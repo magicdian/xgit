@@ -1,0 +1,143 @@
+{
+  "id": "report-annotate-skip-reasons",
+  "name": "report-annotate-skip-reasons",
+  "title": "report annotate skip reasons",
+  "description": "4.1 将 `xgit/Cargo.toml` 的 `package.version` 以及必要的版本测试/文档同步更新到 `2604.1.4`",
+  "status": "completed",
+  "dev_type": "backend",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "transpec",
+  "assignee": "",
+  "createdAt": "2026-04-01T00:00:00.000Z",
+  "completedAt": "2026-04-01T00:00:00.000Z",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 6,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "1",
+      "name": "1.1 在 `xgit/src/annotate.rs` 中引入候选文件处理结果模型，替换当前“边遍历边打印跳过日志”的分支结构",
+      "status": "completed"
+    },
+    {
+      "id": "2",
+      "name": "1.2 让 annotate 在命令结束时统一输出“已渲染 / 未格式化”双计数摘要，并在存在未格式化文件时输出逐文件清单",
+      "status": "completed"
+    },
+    {
+      "id": "3",
+      "name": "1.3 保持 `latest-commit` 模式的手动 amend 提示和现有硬失败分支行为稳定，避免结果汇总重构改变错误处理语义",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "name": "2.1 在 `xgit/src/code_file_types.rs` 中补充基于路径判断内置文件类型条目的辅助能力，供 annotate 复用内置目录知识",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "name": "2.2 在 `xgit/src/annotate.rs` 中基于“内置目录是否认识该路径”和“当前规则是否启用”区分不支持类型、设置未开启后缀功能、未实现渲染器三类原因",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "name": "2.3 更新 `xgit/resources/i18n/zh-CN.toml` 与 `xgit/resources/i18n/en-US.toml`，补充新的摘要和 `未格式化：<path> (<reason>)` 文案",
+      "status": "completed"
+    },
+    {
+      "id": "7",
+      "name": "3.1 为 annotate 补充回归测试，验证 `Android.bp` 这类未知/未支持类型会进入未格式化清单并显示“不支持该类型”",
+      "status": "completed"
+    },
+    {
+      "id": "8",
+      "name": "3.2 为 annotate 补充回归测试，验证已知但未启用的内置后缀（如 `*.cpp`）会显示“设置未开启该后缀功能”",
+      "status": "completed"
+    },
+    {
+      "id": "9",
+      "name": "3.3 为 annotate 补充回归测试，验证未实现渲染器的文件会进入未格式化清单，且全部成功渲染时未格式化数量为 `0` 且不输出清单",
+      "status": "completed"
+    },
+    {
+      "id": "10",
+      "name": "4.1 将 `xgit/Cargo.toml` 的 `package.version` 以及必要的版本测试/文档同步更新到 `2604.1.4`",
+      "status": "completed"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Imported from source change: openspec/changes/archive/2026-04-01-report-annotate-skip-reasons/proposal.md",
+  "meta": {
+    "convertedFrom": "openspec",
+    "originalExtendedType": "change",
+    "sourceFramework": "openspec",
+    "sourcePath": "openspec/changes/archive/2026-04-01-report-annotate-skip-reasons/proposal.md",
+    "sourceCreatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceUpdatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceArchivedAt": null,
+    "sourceStatus": null,
+    "importedAt": "2026-04-17T10:49:21.812Z",
+    "isArchived": true,
+    "preservedSourceFiles": {
+      "tasksMd": "source-tasks.md",
+      "manifestYaml": "source-manifest.yaml",
+      "designMd": "design.md"
+    },
+    "sourceTaskSummary": "4.1 将 `xgit/Cargo.toml` 的 `package.version` 以及必要的版本测试/文档同步更新到 `2604.1.4`",
+    "sourceAcceptanceCriteria": [],
+    "sourceFollowUpSuggestions": [],
+    "sourceTaskEstimates": [],
+    "sourceTaskSections": [
+      {
+        "title": "1. annotate 结果汇总重构",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "1.1 在 `xgit/src/annotate.rs` 中引入候选文件处理结果模型，替换当前“边遍历边打印跳过日志”的分支结构",
+          "1.2 让 annotate 在命令结束时统一输出“已渲染 / 未格式化”双计数摘要，并在存在未格式化文件时输出逐文件清单",
+          "1.3 保持 `latest-commit` 模式的手动 amend 提示和现有硬失败分支行为稳定，避免结果汇总重构改变错误处理语义"
+        ]
+      },
+      {
+        "title": "2. 未格式化原因分类与文案",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "2.1 在 `xgit/src/code_file_types.rs` 中补充基于路径判断内置文件类型条目的辅助能力，供 annotate 复用内置目录知识",
+          "2.2 在 `xgit/src/annotate.rs` 中基于“内置目录是否认识该路径”和“当前规则是否启用”区分不支持类型、设置未开启后缀功能、未实现渲染器三类原因",
+          "2.3 更新 `xgit/resources/i18n/zh-CN.toml` 与 `xgit/resources/i18n/en-US.toml`，补充新的摘要和 `未格式化：<path> (<reason>)` 文案"
+        ]
+      },
+      {
+        "title": "3. 输出回归测试",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "3.1 为 annotate 补充回归测试，验证 `Android.bp` 这类未知/未支持类型会进入未格式化清单并显示“不支持该类型”",
+          "3.2 为 annotate 补充回归测试，验证已知但未启用的内置后缀（如 `*.cpp`）会显示“设置未开启该后缀功能”",
+          "3.3 为 annotate 补充回归测试，验证未实现渲染器的文件会进入未格式化清单，且全部成功渲染时未格式化数量为 `0` 且不输出清单"
+        ]
+      },
+      {
+        "title": "4. 版本目标同步",
+        "level": 2,
+        "kind": "summary",
+        "content": "",
+        "items": [
+          "4.1 将 `xgit/Cargo.toml` 的 `package.version` 以及必要的版本测试/文档同步更新到 `2604.1.4`"
+        ]
+      }
+    ]
+  }
+}

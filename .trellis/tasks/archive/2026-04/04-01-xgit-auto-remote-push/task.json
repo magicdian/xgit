@@ -1,0 +1,228 @@
+{
+  "id": "xgit-auto-remote-push",
+  "name": "xgit-auto-remote-push",
+  "title": "xgit - 自动识别 remote 并推送",
+  "description": "自动识别单仓库 remote（如 origin/origin2）、支持 Gerrit refs/for/*，并在 push 时可选传递 --no-thin。",
+  "status": "planning",
+  "dev_type": "backend",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "transpec",
+  "assignee": "",
+  "createdAt": "2026-04-01T00:00:00.000Z",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 0,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "1",
+      "name": "创建 Rust 项目 `xgit`（`cargo init --bin`）",
+      "status": "completed"
+    },
+    {
+      "id": "2",
+      "name": "添加依赖：`clap`, `anyhow`, `thiserror`, `dirs`, `serde`（如需配置）",
+      "status": "completed"
+    },
+    {
+      "id": "3",
+      "name": "创建 `README.md` 与基础目录结构",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "name": "1. 初始化项目骨架（apply 时执行）",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "name": "使用 `clap` 定义 `push` 子命令及选项：`--remote`, `--gerrit`, `--no-thin`, `--force-with-lease`, `--dry-run`, `--verbose`",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "name": "添加 help 与 usage 示例",
+      "status": "completed"
+    },
+    {
+      "id": "7",
+      "name": "2. CLI 与参数解析",
+      "status": "completed"
+    },
+    {
+      "id": "8",
+      "name": "3. 远端识别模块",
+      "status": "pending"
+    },
+    {
+      "id": "9",
+      "name": "4. Gerrit 检测与 refspec 构造",
+      "status": "pending"
+    },
+    {
+      "id": "10",
+      "name": "根据构造的参数执行 `git push`（通过 `std::process::Command`），转发 stdout/stderr",
+      "status": "completed"
+    },
+    {
+      "id": "11",
+      "name": "支持 `--dry-run`、`--no-thin`、`--force-with-lease`",
+      "status": "completed"
+    },
+    {
+      "id": "12",
+      "name": "5. Push 执行层",
+      "status": "completed"
+    },
+    {
+      "id": "13",
+      "name": "单元测试：远端识别与命令构造",
+      "status": "pending"
+    },
+    {
+      "id": "14",
+      "name": "集成测试：在临时仓库中验证命令（`--dry-run`）",
+      "status": "pending"
+    },
+    {
+      "id": "15",
+      "name": "6. 测试",
+      "status": "pending"
+    },
+    {
+      "id": "16",
+      "name": "7. 文档与发布",
+      "status": "pending"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Imported from source change: openspec/changes/archive/2026-04-01-xgit-auto-remote-push/proposal.md",
+  "meta": {
+    "convertedFrom": "openspec",
+    "originalExtendedType": "change",
+    "sourceFramework": "openspec",
+    "sourcePath": "openspec/changes/archive/2026-04-01-xgit-auto-remote-push/proposal.md",
+    "sourceCreatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceUpdatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceArchivedAt": null,
+    "sourceStatus": "draft",
+    "importedAt": "2026-04-17T10:49:21.813Z",
+    "isArchived": true,
+    "preservedSourceFiles": {
+      "tasksMd": "source-tasks.md",
+      "manifestYaml": "source-manifest.yaml",
+      "designMd": "design.md"
+    },
+    "sourceTaskSummary": "实现 `xgit push` 的最小可交付清单（MVP），可在实现阶段拆分为具体 PRs。",
+    "sourceAcceptanceCriteria": [
+      "`xgit push` 在典型本地仓库能自动选择 remote 并在 `--dry-run` 下打印正确的 `git push` 命令",
+      "支持 `--no-thin`，命令在 `--dry-run` 下包含该参数",
+      "出现 ambiguous remote 时，非交互模式返回明确错误并提示 `--remote`"
+    ],
+    "sourceFollowUpSuggestions": [
+      "支持 `push-option`、`topic` 与更细粒度的 Gerrit 集成",
+      "提供 `xgit doctor` 检查 remote 与配置一致性",
+      "VSCode/JetBrains 插件集成"
+    ],
+    "sourceTaskEstimates": [
+      {
+        "scope": "1. 初始化项目骨架（apply 时执行）",
+        "value": "0.5 天"
+      },
+      {
+        "scope": "2. CLI 与参数解析",
+        "value": "0.5 天"
+      },
+      {
+        "scope": "3. 远端识别模块",
+        "value": "1 天"
+      },
+      {
+        "scope": "4. Gerrit 检测与 refspec 构造",
+        "value": "0.5 天"
+      },
+      {
+        "scope": "5. Push 执行层",
+        "value": "0.5 天"
+      },
+      {
+        "scope": "6. 测试",
+        "value": "1 天"
+      },
+      {
+        "scope": "7. 文档与发布",
+        "value": "0.5 天"
+      }
+    ],
+    "sourceTaskSections": [
+      {
+        "title": "概览",
+        "level": 2,
+        "kind": "summary",
+        "content": "实现 `xgit push` 的最小可交付清单（MVP），可在实现阶段拆分为具体 PRs。",
+        "items": []
+      },
+      {
+        "title": "任务清单",
+        "level": 2,
+        "kind": "checklist",
+        "content": "",
+        "items": [
+          "初始化项目骨架（apply 时执行）",
+          "创建 Rust 项目 `xgit`（`cargo init --bin`）",
+          "添加依赖：`clap`, `anyhow`, `thiserror`, `dirs`, `serde`（如需配置）",
+          "创建 `README.md` 与基础目录结构",
+          "CLI 与参数解析",
+          "使用 `clap` 定义 `push` 子命令及选项：`--remote`, `--gerrit`, `--no-thin`, `--force-with-lease`, `--dry-run`, `--verbose`",
+          "添加 help 与 usage 示例",
+          "远端识别模块",
+          "实现读取 git 配置与命令输出的 wrapper（调用 `git config`、`git rev-parse`、`git remote -v`）",
+          "实现优先级逻辑（分支配置 → ENV/配置 → 自动推断 → 失败处理）",
+          "提供可测试的接口以便单元测试",
+          "Gerrit 检测与 refspec 构造",
+          "实现 Gerrit 判定（URL 关键字/端口检测 + 强制标志）",
+          "实现 refspec 构造（包含 `refs/for/`）",
+          "Push 执行层",
+          "根据构造的参数执行 `git push`（通过 `std::process::Command`），转发 stdout/stderr",
+          "支持 `--dry-run`、`--no-thin`、`--force-with-lease`",
+          "测试",
+          "单元测试：远端识别与命令构造",
+          "集成测试：在临时仓库中验证命令（`--dry-run`）",
+          "文档与发布",
+          "完善 `README.md`、示例与常见问题（如 remote 冲突处理）",
+          "打包发布（例如 GitHub release）"
+        ]
+      },
+      {
+        "title": "验收准则",
+        "level": 2,
+        "kind": "acceptance",
+        "content": "",
+        "items": [
+          "`xgit push` 在典型本地仓库能自动选择 remote 并在 `--dry-run` 下打印正确的 `git push` 命令",
+          "支持 `--no-thin`，命令在 `--dry-run` 下包含该参数",
+          "出现 ambiguous remote 时，非交互模式返回明确错误并提示 `--remote`"
+        ]
+      },
+      {
+        "title": "后续可选任务",
+        "level": 2,
+        "kind": "follow_up",
+        "content": "",
+        "items": [
+          "支持 `push-option`、`topic` 与更细粒度的 Gerrit 集成",
+          "提供 `xgit doctor` 检查 remote 与配置一致性",
+          "VSCode/JetBrains 插件集成"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-auto-remote-push/task.json","reason":"Task metadata and preserved source lifecycle"}
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-auto-remote-push/prd.md","reason":"Task requirements and acceptance scope"}
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-auto-remote-push/design.md","reason":"Task-specific design constraints to review against"}
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-auto-remote-push/source-tasks.md","reason":"Source checklist and structured task breakdown"}
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-auto-remote-push/source-manifest.yaml","reason":"Source manifest and lifecycle metadata"}
+{"file":".trellis/spec/backend/index.md","reason":"Backend guide index for the converted repository"}
+{"file":".trellis/spec/backend/rust-cli-runtime.md","reason":"Grounded backend runtime guide for this repository"}
+{"file":".trellis/spec/guides/pre-implementation-checklist.md","reason":"Trellis-first checklist before changing code"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse and shared-contract checks for conversion-heavy repos"}
+{"file":".trellis/spec/guides/repository-and-conversion-state.md","reason":"Archive semantics and converted-repository maintenance rules"}

@@ -1,0 +1,98 @@
+> Imported legacy capability spec normalized by Transpec for Trellis-first maintenance. Use grounded Trellis docs under `.trellis/spec/` for ongoing development; this file preserves historical requirement provenance from the source framework.
+
+# shell-completion 规范
+
+## 目的
+该条目由归档来源变更 `add-shell-completion-and-ignore-repo-xgit` 导入。源规范的“目的”字段仍是占位内容；请以下方需求与场景作为当前可追溯的行为定义。
+## 需求
+### 需求:系统必须提供 shell completion 脚本生成入口
+`xgit` 必须提供统一的 completion 导出入口，让用户能够为受支持的 shell 生成补全脚本，而不必手写或维护独立脚本。
+
+#### 场景:生成 zsh 补全脚本
+- **当** 用户执行 `xgit completion zsh`
+- **那么** 系统必须输出可供 zsh 加载的补全脚本内容
+
+#### 场景:生成 bash 补全脚本
+- **当** 用户执行 `xgit completion bash`
+- **那么** 系统必须输出可供 bash 加载的补全脚本内容
+
+#### 场景:生成 fish 补全脚本
+- **当** 用户执行 `xgit completion fish`
+- **那么** 系统必须输出可供 fish 加载的补全脚本内容
+
+### 需求:系统必须支持 completion 交互安装模式
+系统必须支持 `xgit completion --install` 模式：自动识别当前 shell、先写入临时脚本供检查、明确提示将写入的目标文件，并在用户确认后才真正写入安装目标。
+
+#### 场景:install 模式自动识别当前 shell
+- **当** 用户执行 `xgit completion --install`
+- **那么** 系统必须自动识别当前终端 shell 类型
+- **并且** 识别结果必须用于后续补全脚本生成和安装目标路径决策
+
+#### 场景:install 模式先写入临时脚本并提示检查
+- **当** 用户执行 `xgit completion --install`
+- **那么** 系统必须先将补全脚本生成到临时目录
+- **并且** 系统必须输出该临时脚本路径，提示用户可先检查内容
+
+#### 场景:install 模式在确认前展示写入目标
+- **当** 用户执行 `xgit completion --install`
+- **那么** 系统必须在确认前明确提示目标补全文件路径
+- **并且** 系统必须提示将写入的 shell 配置文件路径（或明确提示该 shell 无需写入配置文件）
+
+#### 场景:用户确认后才执行安装
+- **当** 用户执行 `xgit completion --install`
+- **并且** 用户在确认提示中输入 `Y` 或 `y`
+- **那么** 系统必须继续写入目标补全文件与配置文件更新
+
+#### 场景:配置写入必须带托管注释块并可替换
+- **当** 用户执行 `xgit completion --install` 并确认安装
+- **并且** 目标 shell 需要写入配置文件
+- **那么** 系统写入的配置片段必须被固定 begin/end 注释包裹
+- **并且** 当配置文件中已存在旧的同类托管注释块时，系统必须替换旧块而不是重复追加
+
+#### 场景:用户未确认时停止安装
+- **当** 用户执行 `xgit completion --install`
+- **并且** 用户输入除 `Y` / `y` 以外的内容（包含直接回车）
+- **那么** 系统必须停止安装流程
+- **并且** 系统不得写入目标补全文件或 shell 配置文件
+
+### 需求:completion 输出必须覆盖当前有效命令树
+生成的补全脚本必须来自当前有效 CLI 命令树，确保主命令、子命令和静态参数与实际 `xgit` 行为保持一致。
+
+#### 场景:补全输出包含当前已发布子命令
+- **当** 用户生成任一受支持 shell 的补全脚本
+- **那么** 输出必须覆盖 `push`、`setup`、`annotate`、`reset`、`checkout-remote` 与 `completion` 等当前主子命令
+
+#### 场景:补全输出包含静态选项
+- **当** 用户生成补全脚本
+- **那么** 输出必须覆盖如 `push --remote`、`push --dry-run`、`annotate --latest-commit`、`reset --hard` 等静态参数名
+
+### 需求:completion 生成不得依赖当前目录位于 Git 工作区
+生成补全脚本属于工具安装与发现能力，系统必须允许用户在任意当前目录下导出补全脚本，而不得要求当前目录已经位于某个 Git 仓库内。
+
+#### 场景:在非 Git 工作区中导出补全
+- **当** 用户当前目录不在任何 Git 工作区内
+- **当** 用户执行 `xgit completion zsh`
+- **那么** 系统必须仍然成功输出补全脚本
+
+### 需求:系统必须拒绝不受支持的 shell 标识
+当用户请求未知或未受支持的 shell 类型时，系统必须拒绝生成并给出明确错误，而不是输出错误格式的脚本。
+
+#### 场景:请求未知 shell
+- **当** 用户执行 `xgit completion tcsh`
+- **那么** 系统必须拒绝执行
+- **并且** 系统必须提示该 shell 当前不受支持
+
+### 需求:completion 命令必须遵循功能开关状态
+`xgit completion` 必须在生成脚本或进入交互安装前检查有效配置中的功能开关；当 completion 功能被关闭时，系统必须拒绝执行，而不是继续导出脚本或安装补全。
+
+#### 场景:completion 功能关闭时拒绝生成脚本
+- **当** 有效配置将 `completion` 功能设为关闭
+- **当** 用户执行 `xgit completion zsh`
+- **那么** 系统必须拒绝执行
+- **并且** 系统必须提示该功能当前已被配置关闭
+
+#### 场景:completion 功能关闭时拒绝进入安装模式
+- **当** 有效配置将 `completion` 功能设为关闭
+- **当** 用户执行 `xgit completion --install`
+- **那么** 系统必须拒绝执行
+- **并且** 系统不得继续生成临时脚本或写入安装目标

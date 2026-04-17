@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/guides/pre-implementation-checklist.md", "reason": "Trellis-first boundary rules for converted repos"}
+{"file": ".trellis/spec/guides/repository-and-conversion-state.md", "reason": "Conversion snapshot, provenance, and bootstrap state guide"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer checks for Trellis maintenance layer changes"}
+{"file": ".trellis/spec/backend/rust-cli-runtime.md", "reason": "Ground actual runtime ownership when refreshing bootstrap docs"}
+{"file": ".trellis/spec/frontend/terminal-setup-ui.md", "reason": "Ground interaction-surface ownership when refreshing bootstrap docs"}

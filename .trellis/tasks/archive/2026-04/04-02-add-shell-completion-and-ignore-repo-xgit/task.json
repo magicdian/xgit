@@ -1,0 +1,153 @@
+{
+  "id": "add-shell-completion-and-ignore-repo-xgit",
+  "name": "add-shell-completion-and-ignore-repo-xgit",
+  "title": "add shell completion and ignore repo xgit",
+  "description": "`xgit` 现在已经提供了多个日常开发命令，但用户在命令名和参数不熟时只能反复查看 help，使用成本逐渐上升。为常用 shell 提供 `Tab` 补全，可以把“记命令”这件事转成“边输入边发现”，更贴合 macOS 和 Linux 上的 CLI 使用习惯。 同时，仓库级配置目录 `.xgit/` 目前会干扰 `annotate` 命令本身的处理范围：它既可能在 `--latest-commit` 模式下被当成工作区不干净的来源，也可能在 `staged` / `include-untracked` 相关路径里被误当成候选文件。需要把仓库级 `.xgit/` 从整个 `annotate` 命令的候选与校验范围中排除，同时保持仓库配置优先级不变。 - 新增 shell completion 能力，为 `xgit` 提供适用于主流 shell 的补全脚本生成能力，首版至少覆盖 macOS 和 Linux 上常见的 `zsh`、`bash`、`fish`，并为 PowerShell 保留同一生成路径 - 新增 `xgit completion --install` 交互安装能力：自动识别当前终端 shell，先将补全脚本写入临时目录供用户检查，再明确提示将写入的目标补全文件和 shell 配置文件，只有用户输入 `Y` 或 `y` 时才继续安装 - `completion --install` 在写入 shell 配置文件时必须使用带注释边界的托管配置块，后续重复安装时应识别旧块并替换，避免重复追加 - 首版补全至少覆盖命令名、子命令名和静态参数名，优先解决“记不住命令和选项”的核心问题 - 补全输出必须复用现有 CLI 命令树定义，避免维护独立的补全元数据 - 文档需要补充不同 shell 的启用方式，让用户能在本地安装并使用补全 - 将项目版本号更新到 `2604.2.2` - 修复 `xgit annotate` 命令对仓库根 `.xgit/` 的处理：无论默认 `annotate` 还是 `annotate --latest-commit`，`.xgit/` 及其内容都不得进入注释候选范围，也不得再被视为阻止执行的脏状态来源 - 上述忽略策略只作用于 `annotate` 命令自身的候选筛选与前置校验，不得影响仓库级 `.xgit/config.toml` 继续作为高优先级配置来源被读取 - `shell-completion`: 为 `xgit` 生成并分发面向主流 shell 的补全脚本，帮助用户通过 `Tab` 发现命令和参数 - `annotation-normalization`: 调整 `annotate` 命令的候选筛选与前置校验，忽略仓库级 `.xgit/` 目录，但不改变仓库配置优先级 - `versioning-source-unification`: 将本次落地后的目标版本号更新为 `2604.2.2` - 受影响代码： - `xgit/Cargo.toml` - `xgit/src/main.rs` - `xgit/src/annotate.rs` - `xgit/src/config.rs` - `xgit/README.md` - 可能新增补全相关依赖、命令入口、测试与发布/安装说明 - 需要新增 shell completion 规范，并扩展注释规范化与版本规范",
+  "status": "completed",
+  "dev_type": "backend",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "transpec",
+  "assignee": "",
+  "createdAt": "2026-04-02T00:00:00.000Z",
+  "completedAt": "2026-04-02T00:00:00.000Z",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 6,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "1",
+      "name": "1.1 在 `xgit/Cargo.toml` 中补充 completion 生成所需依赖，并在 `xgit/src/main.rs` 中新增 `completion <shell>` 子命令定义",
+      "status": "completed"
+    },
+    {
+      "id": "2",
+      "name": "1.2 实现基于现有 `clap` 命令树的 completion 脚本输出逻辑，覆盖首版支持的 shell 类型与不支持 shell 的报错",
+      "status": "completed"
+    },
+    {
+      "id": "3",
+      "name": "1.3 在 `xgit/resources/i18n/zh-CN.toml` 与 `xgit/resources/i18n/en-US.toml` 中补充 completion 子命令相关 help / 错误文案",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "name": "1.4 扩展 `xgit completion --install`：自动识别当前 shell、先生成 tmp 脚本并提示检查、展示目标补全文件/配置文件写入路径，并在用户输入 `Y/y` 后才执行写入",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "name": "1.5 `completion --install` 写入 shell 配置时使用带 begin/end 注释的托管块，并支持识别旧块后替换，避免重复追加",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "name": "2.1 在 `xgit/src/annotate.rs` 中抽取 annotate 候选文件筛选与 latest-commit 工作区洁净校验所需的 `.xgit/` 过滤逻辑，只忽略仓库根 `.xgit/` 目录及其子路径",
+      "status": "completed"
+    },
+    {
+      "id": "7",
+      "name": "2.2 保持 `xgit/src/config.rs` 的项目级配置读取逻辑不变，并让默认 `annotate` 与 `annotate --latest-commit` 在忽略 `.xgit/` 后继续使用仓库级有效配置",
+      "status": "completed"
+    },
+    {
+      "id": "8",
+      "name": "3.1 为 completion 输出补充自动化验证，至少覆盖受支持 shell 的成功生成与未知 shell 的失败路径",
+      "status": "completed"
+    },
+    {
+      "id": "9",
+      "name": "3.2 为 `annotate` 补充回归测试，验证默认模式不会把 `.xgit/` 纳入候选、`--latest-commit` 在仅存在 `.xgit/` 状态时可继续执行、存在其他脏文件时仍会失败，并验证仓库级配置仍然生效",
+      "status": "completed"
+    },
+    {
+      "id": "10",
+      "name": "3.3 更新 `xgit/README.md`，补充 shell completion 的生成/启用方式与 `.xgit/` 忽略修复后的 annotate 使用说明",
+      "status": "completed"
+    },
+    {
+      "id": "11",
+      "name": "3.4 将 `xgit/Cargo.toml` 版本更新到 `2604.2.2`，并验证 `xgit --version` 输出同步变化",
+      "status": "completed"
+    },
+    {
+      "id": "12",
+      "name": "3.5 为 `completion --install` 补充自动化验证，至少覆盖 shell 自动识别、确认前不写入、确认后写入与目标路径提示",
+      "status": "completed"
+    },
+    {
+      "id": "13",
+      "name": "3.6 为托管配置块补充自动化验证，至少覆盖“首次写入成功”和“重复安装替换旧块而非重复追加”",
+      "status": "completed"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Imported from source change: openspec/changes/archive/2026-04-02-add-shell-completion-and-ignore-repo-xgit/proposal.md",
+  "meta": {
+    "convertedFrom": "openspec",
+    "originalExtendedType": "change",
+    "sourceFramework": "openspec",
+    "sourcePath": "openspec/changes/archive/2026-04-02-add-shell-completion-and-ignore-repo-xgit/proposal.md",
+    "sourceCreatedAt": "2026-04-02T00:00:00.000Z",
+    "sourceUpdatedAt": "2026-04-02T00:00:00.000Z",
+    "sourceArchivedAt": null,
+    "sourceStatus": null,
+    "importedAt": "2026-04-17T10:49:21.816Z",
+    "isArchived": true,
+    "preservedSourceFiles": {
+      "tasksMd": "source-tasks.md",
+      "manifestYaml": "source-manifest.yaml",
+      "designMd": "design.md"
+    },
+    "sourceTaskSummary": null,
+    "sourceAcceptanceCriteria": [],
+    "sourceFollowUpSuggestions": [],
+    "sourceTaskEstimates": [],
+    "sourceTaskSections": [
+      {
+        "title": "1. Shell completion 命令接入",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "1.1 在 `xgit/Cargo.toml` 中补充 completion 生成所需依赖，并在 `xgit/src/main.rs` 中新增 `completion <shell>` 子命令定义",
+          "1.2 实现基于现有 `clap` 命令树的 completion 脚本输出逻辑，覆盖首版支持的 shell 类型与不支持 shell 的报错",
+          "1.3 在 `xgit/resources/i18n/zh-CN.toml` 与 `xgit/resources/i18n/en-US.toml` 中补充 completion 子命令相关 help / 错误文案",
+          "1.4 扩展 `xgit completion --install`：自动识别当前 shell、先生成 tmp 脚本并提示检查、展示目标补全文件/配置文件写入路径，并在用户输入 `Y/y` 后才执行写入",
+          "1.5 `completion --install` 写入 shell 配置时使用带 begin/end 注释的托管块，并支持识别旧块后替换，避免重复追加"
+        ]
+      },
+      {
+        "title": "2. annotate .xgit 忽略修复",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "2.1 在 `xgit/src/annotate.rs` 中抽取 annotate 候选文件筛选与 latest-commit 工作区洁净校验所需的 `.xgit/` 过滤逻辑，只忽略仓库根 `.xgit/` 目录及其子路径",
+          "2.2 保持 `xgit/src/config.rs` 的项目级配置读取逻辑不变，并让默认 `annotate` 与 `annotate --latest-commit` 在忽略 `.xgit/` 后继续使用仓库级有效配置"
+        ]
+      },
+      {
+        "title": "3. 测试、文档与版本",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "3.1 为 completion 输出补充自动化验证，至少覆盖受支持 shell 的成功生成与未知 shell 的失败路径",
+          "3.2 为 `annotate` 补充回归测试，验证默认模式不会把 `.xgit/` 纳入候选、`--latest-commit` 在仅存在 `.xgit/` 状态时可继续执行、存在其他脏文件时仍会失败，并验证仓库级配置仍然生效",
+          "3.3 更新 `xgit/README.md`，补充 shell completion 的生成/启用方式与 `.xgit/` 忽略修复后的 annotate 使用说明",
+          "3.4 将 `xgit/Cargo.toml` 版本更新到 `2604.2.2`，并验证 `xgit --version` 输出同步变化",
+          "3.5 为 `completion --install` 补充自动化验证，至少覆盖 shell 自动识别、确认前不写入、确认后写入与目标路径提示",
+          "3.6 为托管配置块补充自动化验证，至少覆盖“首次写入成功”和“重复安装替换旧块而非重复追加”"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "id": "customize-annotation-prefix-suffix",
+  "name": "customize-annotation-prefix-suffix",
+  "title": "customize annotation prefix suffix",
+  "description": "`xgit annotate` 当前只能通过 `annotate.policies.add/modify/del` 配置单段前置注释文本，并在 `c_line_block` 渲染器里硬编码输出 `// end add|modify|del` 作为结束标记。这个模型无法表达很多团队真实在用的“起始标记 + 结束标记”规范，例如 `// add by xx yyyy-mm-dd ... {@` 与 `//@}` 这种成对包裹模板，因此现有功能虽然能渲染注释，但还不足以覆盖团队级注释规范。 - 为注释规范化能力增加“独立的起始模板和结束模板”配置模型，允许针对 `add`、`modify` 和 `del` 分别定义前缀/后缀内容，而不是只支持单条头部模板。 - 让注释模板继续支持作者标识、日期、原因、引用类型和值等运行时变量展开，并允许团队把这些变量放到起始模板或结束模板中。 - 调整 `c_line_block` 渲染器，移除固定的 `end add|modify|del` 输出，改为严格使用有效配置中的结束模板渲染注释块边界。 - 扩展 `xgit setup` 的注释策略配置入口，使用户能够查看和编辑注释块前缀/后缀模板，而不是只能编辑当前的单段策略文本。 - 为已有配置提供兼容路径，避免现有只配置 `annotate.policies.*` 的项目在升级后直接失效。 <!-- 无 --> - `annotation-normalization`: 注释渲染从“单段模板 + 固定结束语”升级为“可配置起始模板 + 可配置结束模板”的块级包裹模型。 - `interactive-setup`: 设置界面的注释策略栏目需要暴露注释前缀/后缀模板的编辑能力。 - 注释配置模型和默认配置需要扩展，以表达 `add/modify/del` 各自的起始模板与结束模板。 - `xgit/src/annotate.rs` 的 `c_line_block` 渲染逻辑和相关测试需要改造，去掉硬编码结束标记并支持成对模板。 - `xgit/src/setup_ui.rs`、`xgit/src/config.rs` 及默认配置文件需要同步更新，以支持新的配置项展示、编辑和落盘。 - 如果现有配置格式需要兼容或迁移，配置加载与渲染阶段都需要补充回退逻辑和回归测试。",
+  "status": "completed",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "transpec",
+  "assignee": "",
+  "createdAt": "2026-04-01T00:00:00.000Z",
+  "completedAt": "2026-04-01T00:00:00.000Z",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 6,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "1",
+      "name": "1.1 在 `xgit/src/config.rs` 和默认配置中新增 `annotate.block_templates` 结构，为 `add`、`modify`、`del` 提供 `start`/`end` 默认模板。",
+      "status": "completed"
+    },
+    {
+      "id": "2",
+      "name": "1.2 更新配置加载与合并逻辑，实现“新 `block_templates` 优先、旧 `annotate.policies.*` 回退”的归一化行为，并补充对应单元测试。",
+      "status": "completed"
+    },
+    {
+      "id": "3",
+      "name": "2.1 改造 `xgit/src/annotate.rs` 的 `c_line_block` 渲染逻辑，使其使用配置中的起始模板和结束模板生成注释边界，不再硬编码 `// end <kind>`。",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "name": "2.2 保持 `modify` / `del` 的旧代码记录兼容语义，并增加覆盖自定义结束模板（例如 `//@}`）和旧配置回退行为的渲染测试。",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "name": "3.1 扩展 `xgit setup` 的注释策略栏目，支持编辑 `add`、`modify`、`del` 各自的起始模板与结束模板，并在加载旧配置时展示归一化后的字段值。",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "name": "3.2 更新相关文案、保存逻辑和回归测试，验证 setup 保存后的配置与 `xgit annotate` 渲染结果都符合新的前后缀模板模型。",
+      "status": "completed"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Imported from source change: openspec/changes/archive/2026-04-01-customize-annotation-prefix-suffix/proposal.md",
+  "meta": {
+    "convertedFrom": "openspec",
+    "originalExtendedType": "change",
+    "sourceFramework": "openspec",
+    "sourcePath": "openspec/changes/archive/2026-04-01-customize-annotation-prefix-suffix/proposal.md",
+    "sourceCreatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceUpdatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceArchivedAt": null,
+    "sourceStatus": null,
+    "importedAt": "2026-04-17T10:49:21.805Z",
+    "isArchived": true,
+    "preservedSourceFiles": {
+      "tasksMd": "source-tasks.md",
+      "manifestYaml": "source-manifest.yaml",
+      "designMd": "design.md"
+    },
+    "sourceTaskSummary": null,
+    "sourceAcceptanceCriteria": [],
+    "sourceFollowUpSuggestions": [],
+    "sourceTaskEstimates": [],
+    "sourceTaskSections": [
+      {
+        "title": "1. 配置模型与兼容归一化",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "1.1 在 `xgit/src/config.rs` 和默认配置中新增 `annotate.block_templates` 结构，为 `add`、`modify`、`del` 提供 `start`/`end` 默认模板。",
+          "1.2 更新配置加载与合并逻辑，实现“新 `block_templates` 优先、旧 `annotate.policies.*` 回退”的归一化行为，并补充对应单元测试。"
+        ]
+      },
+      {
+        "title": "2. 注释渲染链路",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "2.1 改造 `xgit/src/annotate.rs` 的 `c_line_block` 渲染逻辑，使其使用配置中的起始模板和结束模板生成注释边界，不再硬编码 `// end <kind>`。",
+          "2.2 保持 `modify` / `del` 的旧代码记录兼容语义，并增加覆盖自定义结束模板（例如 `//@}`）和旧配置回退行为的渲染测试。"
+        ]
+      },
+      {
+        "title": "3. 设置界面与回归验证",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "3.1 扩展 `xgit setup` 的注释策略栏目，支持编辑 `add`、`modify`、`del` 各自的起始模板与结束模板，并在加载旧配置时展示归一化后的字段值。",
+          "3.2 更新相关文案、保存逻辑和回归测试，验证 setup 保存后的配置与 `xgit annotate` 渲染结果都符合新的前后缀模板模型。"
+        ]
+      }
+    ]
+  }
+}

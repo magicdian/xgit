@@ -1,0 +1,13 @@
+{"file":".trellis/tasks/archive/2026-04/04-01-annotation-date-format-and-old-render-style/task.json","reason":"Task metadata and preserved source lifecycle"}
+{"file":".trellis/tasks/archive/2026-04/04-01-annotation-date-format-and-old-render-style/prd.md","reason":"Task requirements and acceptance scope"}
+{"file":".trellis/tasks/archive/2026-04/04-01-annotation-date-format-and-old-render-style/design.md","reason":"Task-specific design constraints to review against"}
+{"file":".trellis/tasks/archive/2026-04/04-01-annotation-date-format-and-old-render-style/source-tasks.md","reason":"Source checklist and structured task breakdown"}
+{"file":".trellis/tasks/archive/2026-04/04-01-annotation-date-format-and-old-render-style/source-manifest.yaml","reason":"Source manifest and lifecycle metadata"}
+{"file":".trellis/spec/backend/index.md","reason":"Backend guide index for the converted repository"}
+{"file":".trellis/spec/backend/rust-cli-runtime.md","reason":"Grounded backend runtime guide for this repository"}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend or interaction-surface guide index"}
+{"file":".trellis/spec/frontend/terminal-setup-ui.md","reason":"Grounded interaction-surface guide for this repository"}
+{"file":".trellis/spec/guides/pre-implementation-checklist.md","reason":"Trellis-first checklist before changing code"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse and shared-contract checks for conversion-heavy repos"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Cross-layer checks for runtime plus interaction changes"}
+{"file":".trellis/spec/guides/repository-and-conversion-state.md","reason":"Archive semantics and converted-repository maintenance rules"}

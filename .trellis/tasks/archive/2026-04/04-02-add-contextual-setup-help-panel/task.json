@@ -1,0 +1,123 @@
+{
+  "id": "add-contextual-setup-help-panel",
+  "name": "add-contextual-setup-help-panel",
+  "title": "add contextual setup help panel",
+  "description": "当前 `xgit setup` 的帮助栏对用户几乎没有提供有效信息：它不会随着当前选中的菜单项变化，而且现有布局给帮助区分配的高度不足以显示正文，导致帮助框经常呈现为空白。层级菜单已经引入了更多导航路径，如果没有上下文说明和当前可用快捷键提示，用户很难理解当前选项的意义，也难以判断下一步该按什么键。 - 为设置界面的帮助栏增加“当前选项说明 + 当前可用快捷键”两类上下文内容，而不是只显示固定通用提示。 - 要求帮助栏根据当前交互状态动态切换内容： - 普通菜单态显示当前高亮项的用途，以及该状态下可用的快捷键。 - 文本编辑态显示当前编辑行为的说明和编辑快捷键。 - 退出确认态显示确认动作的意义和可用快捷键。 - 调整设置界面布局，确保帮助栏在默认终端尺寸下始终有可见正文空间，不能只剩边框而没有内容。 - 为根菜单及常见子菜单项补充可本地化的帮助文案，确保用户在浏览配置项时能看到该项的意义。 <!-- 无 --> - `interactive-setup`: 设置界面需要为当前高亮项和当前交互状态提供可见、上下文化的帮助内容，并展示对应快捷键。 - 受影响代码：`xgit/src/setup_ui.rs` 的帮助内容生成、菜单项元数据与界面布局逻辑。 - 受影响资源：`xgit/resources/i18n/zh-CN.toml`、`xgit/resources/i18n/en-US.toml` 中的 setup 帮助文案键。 - 受影响规范：`interactive-setup` 需要新增或修改帮助栏行为相关需求与场景。",
+  "status": "completed",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "transpec",
+  "assignee": "",
+  "createdAt": "2026-04-02T00:00:00.000Z",
+  "completedAt": "2026-04-02T00:00:00.000Z",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 6,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "1",
+      "name": "1.1 为 setup 普通菜单态、文本编辑态和退出确认态实现结构化帮助内容生成接口",
+      "status": "completed"
+    },
+    {
+      "id": "2",
+      "name": "1.2 为根菜单和主要子菜单项补充说明文案映射，并为未显式配置的条目提供回退说明",
+      "status": "completed"
+    },
+    {
+      "id": "3",
+      "name": "1.3 按当前条目类型组合快捷键列表，确保帮助栏只显示当前状态真实可用的操作",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "name": "2.1 调整 setup 布局中的帮助栏高度，确保帮助块至少能显示一行说明和一行快捷键",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "name": "2.2 更新帮助栏渲染逻辑，使其按两行输出“当前项说明 + 快捷键提示”",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "name": "2.3 在 `zh-CN` 和 `en-US` 资源文件中新增帮助说明和快捷键动作相关文案",
+      "status": "completed"
+    },
+    {
+      "id": "7",
+      "name": "3.1 为帮助内容生成逻辑补充单元测试，覆盖根菜单、编辑态和退出确认态",
+      "status": "completed"
+    },
+    {
+      "id": "8",
+      "name": "3.2 为帮助栏布局补充回归测试，确保默认 setup 界面不会再次出现只有边框没有正文的帮助区",
+      "status": "completed"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Imported from source change: openspec/changes/archive/2026-04-02-add-contextual-setup-help-panel/proposal.md",
+  "meta": {
+    "convertedFrom": "openspec",
+    "originalExtendedType": "change",
+    "sourceFramework": "openspec",
+    "sourcePath": "openspec/changes/archive/2026-04-02-add-contextual-setup-help-panel/proposal.md",
+    "sourceCreatedAt": "2026-04-02T00:00:00.000Z",
+    "sourceUpdatedAt": "2026-04-02T00:00:00.000Z",
+    "sourceArchivedAt": null,
+    "sourceStatus": null,
+    "importedAt": "2026-04-17T10:49:21.815Z",
+    "isArchived": true,
+    "preservedSourceFiles": {
+      "tasksMd": "source-tasks.md",
+      "manifestYaml": "source-manifest.yaml",
+      "designMd": "design.md"
+    },
+    "sourceTaskSummary": null,
+    "sourceAcceptanceCriteria": [],
+    "sourceFollowUpSuggestions": [],
+    "sourceTaskEstimates": [],
+    "sourceTaskSections": [
+      {
+        "title": "1. 帮助内容模型",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "1.1 为 setup 普通菜单态、文本编辑态和退出确认态实现结构化帮助内容生成接口",
+          "1.2 为根菜单和主要子菜单项补充说明文案映射，并为未显式配置的条目提供回退说明",
+          "1.3 按当前条目类型组合快捷键列表，确保帮助栏只显示当前状态真实可用的操作"
+        ]
+      },
+      {
+        "title": "2. 界面渲染与本地化",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "2.1 调整 setup 布局中的帮助栏高度，确保帮助块至少能显示一行说明和一行快捷键",
+          "2.2 更新帮助栏渲染逻辑，使其按两行输出“当前项说明 + 快捷键提示”",
+          "2.3 在 `zh-CN` 和 `en-US` 资源文件中新增帮助说明和快捷键动作相关文案"
+        ]
+      },
+      {
+        "title": "3. 回归验证",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "3.1 为帮助内容生成逻辑补充单元测试，覆盖根菜单、编辑态和退出确认态",
+          "3.2 为帮助栏布局补充回归测试，确保默认 setup 界面不会再次出现只有边框没有正文的帮助区"
+        ]
+      }
+    ]
+  }
+}
