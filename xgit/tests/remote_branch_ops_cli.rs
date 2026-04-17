@@ -44,13 +44,19 @@ fn init_repo_with_origin_upstream() -> (TempDir, TempDir, String) {
 
     run_git_ok(repo.path(), &["init"]);
     run_git_ok(repo.path(), &["config", "user.name", "xgit-test"]);
-    run_git_ok(repo.path(), &["config", "user.email", "xgit-test@example.com"]);
+    run_git_ok(
+        repo.path(),
+        &["config", "user.email", "xgit-test@example.com"],
+    );
     std::fs::write(repo.path().join("README.md"), "seed\n").expect("write seed file");
     run_git_ok(repo.path(), &["add", "README.md"]);
     run_git_ok(repo.path(), &["commit", "-m", "init"]);
     let initial_branch = current_branch(repo.path());
 
-    run_git_ok(repo.path(), &["remote", "add", "origin", remote.path().to_str().unwrap()]);
+    run_git_ok(
+        repo.path(),
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
     run_git_ok(repo.path(), &["push", "-u", "origin", &initial_branch]);
 
     (repo, remote, initial_branch)
@@ -75,7 +81,10 @@ fn create_remote_branch_and_fetch(
         contributor.path(),
         &["config", "user.email", "xgit-contributor@example.com"],
     );
-    run_git_ok(contributor.path(), &["checkout", "-b", remote_branch, base_branch]);
+    run_git_ok(
+        contributor.path(),
+        &["checkout", "-b", remote_branch, base_branch],
+    );
     std::fs::write(
         contributor.path().join(format!("{remote_branch}.txt")),
         "remote branch content\n",
@@ -122,7 +131,10 @@ fn checkout_remote_creates_local_branch_from_remote_branch() {
     let (repo, remote, base_branch) = init_repo_with_origin_upstream();
     create_remote_branch_and_fetch(repo.path(), remote.path(), &base_branch, "feature-remote");
 
-    let output = run_xgit(repo.path(), &["checkout-remote", "feature-remote", "feature-local"]);
+    let output = run_xgit(
+        repo.path(),
+        &["checkout-remote", "feature-remote", "feature-local"],
+    );
     assert!(
         output.status.success(),
         "checkout-remote should succeed.\nstdout: {}\nstderr: {}",
@@ -144,7 +156,10 @@ fn checkout_remote_fails_when_local_branch_exists() {
     let output = run_xgit(repo.path(), &["checkout-remote", "dup-remote"]);
     assert!(!output.status.success(), "checkout-remote should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("already exists"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("already exists"),
+        "unexpected stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -157,21 +172,40 @@ fn checkout_remote_fails_when_candidates_are_ambiguous() {
 
     run_git_ok(repo.path(), &["init"]);
     run_git_ok(repo.path(), &["config", "user.name", "xgit-test"]);
-    run_git_ok(repo.path(), &["config", "user.email", "xgit-test@example.com"]);
+    run_git_ok(
+        repo.path(),
+        &["config", "user.email", "xgit-test@example.com"],
+    );
     std::fs::write(repo.path().join("README.md"), "seed\n").expect("write seed file");
     run_git_ok(repo.path(), &["add", "README.md"]);
     run_git_ok(repo.path(), &["commit", "-m", "init"]);
 
     run_git_ok(
         repo.path(),
-        &["remote", "add", "alpha", remote_alpha.path().to_str().unwrap()],
+        &[
+            "remote",
+            "add",
+            "alpha",
+            remote_alpha.path().to_str().unwrap(),
+        ],
     );
     run_git_ok(
         repo.path(),
-        &["remote", "add", "beta", remote_beta.path().to_str().unwrap()],
+        &[
+            "remote",
+            "add",
+            "beta",
+            remote_beta.path().to_str().unwrap(),
+        ],
     );
-    run_git_ok(repo.path(), &["push", "alpha", "HEAD:refs/heads/shared-remote"]);
-    run_git_ok(repo.path(), &["push", "beta", "HEAD:refs/heads/shared-remote"]);
+    run_git_ok(
+        repo.path(),
+        &["push", "alpha", "HEAD:refs/heads/shared-remote"],
+    );
+    run_git_ok(
+        repo.path(),
+        &["push", "beta", "HEAD:refs/heads/shared-remote"],
+    );
     run_git_ok(repo.path(), &["fetch", "alpha", "shared-remote"]);
     run_git_ok(repo.path(), &["fetch", "beta", "shared-remote"]);
 

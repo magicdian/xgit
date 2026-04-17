@@ -183,13 +183,8 @@ pub fn run(
     let mut unformatted = Vec::<UnformattedFile>::new();
 
     for change in &changes {
-        match process_candidate_change(
-            change,
-            options.latest_commit,
-            config,
-            catalog,
-            &repo_root,
-        )? {
+        match process_candidate_change(change, options.latest_commit, config, catalog, &repo_root)?
+        {
             CandidateProcessResult::Prepared {
                 mut file,
                 context_candidates: file_context_candidates,
@@ -247,7 +242,7 @@ pub fn run(
         let updated = apply_c_line_segments(
             &file.logical_content,
             &file.segments,
-            &context,
+            context,
             config,
             &file.change.path,
         );
@@ -287,7 +282,8 @@ fn process_candidate_change(
                 );
             }
 
-            let Some(current_content) = load_target_content(repo_root, latest_commit, change)? else {
+            let Some(current_content) = load_target_content(repo_root, latest_commit, change)?
+            else {
                 return Ok(CandidateProcessResult::Unformatted(UnformattedFile {
                     path: change.path.clone(),
                     reason: UnformattedReason::NoTargetContent,
@@ -351,9 +347,8 @@ fn format_unformatted_reason(reason: &UnformattedReason, catalog: &Catalog) -> S
         UnformattedReason::NoTargetContent => {
             catalog.t("status.annotate.unformatted_reason.no_target_content")
         }
-        UnformattedReason::DeleteRequiresDelTemplateAndOldCode => catalog.t(
-            "status.annotate.unformatted_reason.delete_requires_del_template_and_old_code",
-        ),
+        UnformattedReason::DeleteRequiresDelTemplateAndOldCode => catalog
+            .t("status.annotate.unformatted_reason.delete_requires_del_template_and_old_code"),
     }
 }
 
@@ -479,8 +474,14 @@ fn collect_runtime_context(
             );
             if prompt_yes_no(&prompt, true)? {
                 values.insert("reason".to_string(), defaults.reason.clone());
-                values.insert("reference_kind".to_string(), defaults.reference_kind.clone());
-                values.insert("reference_value".to_string(), defaults.reference_value.clone());
+                values.insert(
+                    "reference_kind".to_string(),
+                    defaults.reference_kind.clone(),
+                );
+                values.insert(
+                    "reference_value".to_string(),
+                    defaults.reference_value.clone(),
+                );
                 reused_context = true;
             }
         }
@@ -515,7 +516,9 @@ fn collect_runtime_context(
                 let mut candidate_value = current.clone();
                 if !candidate_value.is_empty()
                     && !candidates.is_empty()
-                    && !candidates.iter().any(|candidate| candidate == &candidate_value)
+                    && !candidates
+                        .iter()
+                        .any(|candidate| candidate == &candidate_value)
                 {
                     if reused_context && field.id == "reference_kind" {
                         let retry = prompt_line(&field_prompt(catalog, config, field))?;
@@ -542,7 +545,9 @@ fn collect_runtime_context(
                 }
                 if !candidate_value.is_empty()
                     && !candidates.is_empty()
-                    && !candidates.iter().any(|candidate| candidate == &candidate_value)
+                    && !candidates
+                        .iter()
+                        .any(|candidate| candidate == &candidate_value)
                 {
                     bail!(
                         "{}",
@@ -945,7 +950,10 @@ fn find_candidate_blocks(
         }
         matches.sort_by_key(|(pattern, _, _)| std::cmp::Reverse(pattern.start_lines.len()));
         let (pattern, indent, mut context_candidate) = matches.remove(0);
-        normalize_context_candidate(&mut context_candidate, config.annotate.reference_kind_values());
+        normalize_context_candidate(
+            &mut context_candidate,
+            config.annotate.reference_kind_values(),
+        );
         let start_len = pattern.start_lines.len();
         let search_start = line_idx + start_len;
         let Some(end_start) = find_matching_end(lines, search_start, pattern, &indent) else {
@@ -1750,7 +1758,8 @@ fn render_c_line_block(
         .lines()
         .map(|line| format!("{}{}", comment_indent, line))
         .collect::<Vec<_>>();
-    if !suppress_old_code && (segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete)
+    if !suppress_old_code
+        && (segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete)
     {
         match explicit_old_code_mode {
             Some(AnnotateOldCodeMode::None) => {}
@@ -2030,14 +2039,14 @@ mod tests {
         collect_latest_commit_changes, collect_runtime_context, collect_staged_changes,
         decide_segment_render, git_stdout, load_baseline_content, matches_pattern,
         normalize_content_before_render, parse_hunk_segments, parse_name_status_output,
-        resolve_reusable_context_defaults, run, select_renderer, ChangeKind,
-        ContextReuseCandidate, FileChange, HunkSegment, RuntimeContext, SegmentRenderDecision,
-        UnformattedFile, UnformattedReason,
+        resolve_reusable_context_defaults, run, select_renderer, ChangeKind, ContextReuseCandidate,
+        FileChange, HunkSegment, RuntimeContext, SegmentRenderDecision, UnformattedFile,
+        UnformattedReason,
     };
     use crate::code_file_types::{default_selected_keys, file_rules_from_selection};
     use crate::config::{
-        load_runtime_config, merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig,
-        LoadConfigOptions,
+        load_runtime_config, merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode,
+        AppConfig, LoadConfigOptions,
     };
     use chrono::NaiveDateTime;
     use std::collections::{BTreeMap, HashMap};
@@ -2330,7 +2339,13 @@ end = "//@}"
         let content = "\n    int value = 42;\n\n";
 
         cfg.annotate.render.wrap_blank_lines = true;
-        let wrapped = apply_c_line_segments(content, &[segment.clone()], &context, &cfg, "demo.c");
+        let wrapped = apply_c_line_segments(
+            content,
+            std::slice::from_ref(&segment),
+            &context,
+            &cfg,
+            "demo.c",
+        );
         assert!(wrapped
             .lines()
             .next()
@@ -2457,7 +2472,7 @@ end = "//@}"
         };
         let updated = apply_c_line_segments(
             "",
-            &[segment.clone()],
+            std::slice::from_ref(&segment),
             &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
             &cfg,
             "demo.c",

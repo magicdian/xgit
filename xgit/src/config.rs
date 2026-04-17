@@ -19,7 +19,7 @@ pub struct RuntimeConfig {
     pub git_root: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct AppConfig {
     pub ui: UiConfig,
@@ -63,7 +63,7 @@ pub struct AnnotateConfig {
     pub file_rules: Vec<FileRuleConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct StagedConfig {
     pub include_untracked: bool,
@@ -139,9 +139,10 @@ pub struct AnnotateOldCodeLineCommentConfig {
     pub body_suffix: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AnnotateOldCodeLineLayout {
+    #[default]
     PerLine,
     HeaderBody,
 }
@@ -161,7 +162,7 @@ pub struct BlockTemplates {
     pub del: BlockTemplate,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct BlockTemplate {
     pub enabled: bool,
@@ -182,18 +183,6 @@ pub struct IdentityConfig {
     pub author_tag: Option<String>,
     pub name: Option<String>,
     pub email: Option<String>,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            ui: UiConfig::default(),
-            features: FeaturesConfig::default(),
-            push: PushConfig::default(),
-            annotate: AnnotateConfig::default(),
-            identity: IdentityConfig::default(),
-        }
-    }
 }
 
 impl Default for UiConfig {
@@ -226,14 +215,6 @@ impl Default for AnnotateConfig {
             old_code: AnnotateOldCodeConfig::default(),
             block_templates: BlockTemplates::default(),
             file_rules: builtin_default_file_rules(),
-        }
-    }
-}
-
-impl Default for StagedConfig {
-    fn default() -> Self {
-        Self {
-            include_untracked: false,
         }
     }
 }
@@ -286,12 +267,6 @@ impl Default for AnnotateOldCodeLineCommentConfig {
     }
 }
 
-impl Default for AnnotateOldCodeLineLayout {
-    fn default() -> Self {
-        Self::PerLine
-    }
-}
-
 impl Default for AnnotateOldCodeBlockCommentConfig {
     fn default() -> Self {
         Self {
@@ -311,19 +286,10 @@ impl Default for BlockTemplates {
     }
 }
 
-impl Default for BlockTemplate {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            start: String::new(),
-            end: String::new(),
-        }
-    }
-}
-
 impl BlockTemplate {
     pub fn enable_if_customized_for(&mut self, kind: &str) {
-        if self.start != builtin_start_template(kind) || self.end != compatibility_end_template(kind)
+        if self.start != builtin_start_template(kind)
+            || self.end != compatibility_end_template(kind)
         {
             self.enabled = true;
         }
@@ -345,7 +311,8 @@ impl AnnotateConfig {
     }
 
     pub fn reference_kind_values(&self) -> &[String] {
-        self.form.option_values(Self::reference_kind_option_set_name())
+        self.form
+            .option_values(Self::reference_kind_option_set_name())
     }
 
     #[cfg(test)]
@@ -686,15 +653,12 @@ impl AppConfig {
                 }
             }
             if let Some(reference_kinds) = annotate.reference_kinds {
-                self.annotate
-                    .form
-                    .option_sets
-                    .insert(
-                        AnnotateConfig::reference_kind_option_set_name().to_string(),
-                        AnnotateOptionSetConfig {
-                            values: reference_kinds,
-                        },
-                    );
+                self.annotate.form.option_sets.insert(
+                    AnnotateConfig::reference_kind_option_set_name().to_string(),
+                    AnnotateOptionSetConfig {
+                        values: reference_kinds,
+                    },
+                );
             }
             if let Some(date) = annotate.date {
                 if let Some(format) = date.format {
@@ -759,7 +723,10 @@ impl AppConfig {
                         self.annotate.block_templates.add.end = end;
                     }
                     if add.enabled.is_none() {
-                        self.annotate.block_templates.add.enable_if_customized_for("add");
+                        self.annotate
+                            .block_templates
+                            .add
+                            .enable_if_customized_for("add");
                     }
                 }
                 if let Some(modify) = block_templates.modify {
@@ -792,7 +759,10 @@ impl AppConfig {
                         self.annotate.block_templates.del.end = end;
                     }
                     if del.enabled.is_none() {
-                        self.annotate.block_templates.del.enable_if_customized_for("del");
+                        self.annotate
+                            .block_templates
+                            .del
+                            .enable_if_customized_for("del");
                     }
                 }
             }
@@ -1032,12 +1002,17 @@ fn compatibility_end_template(kind: &str) -> String {
 
 pub fn builtin_start_template(kind: &str) -> String {
     match kind {
-        "add" => "// {author_tag} {date} add: {reason} ({reference_kind}:{reference_value})"
-            .to_string(),
-        "modify" => "// {author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
-            .to_string(),
-        "del" => "// {author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
-            .to_string(),
+        "add" => {
+            "// {author_tag} {date} add: {reason} ({reference_kind}:{reference_value})".to_string()
+        }
+        "modify" => {
+            "// {author_tag} {date} modify: {reason} ({reference_kind}:{reference_value}) old={old}"
+                .to_string()
+        }
+        "del" => {
+            "// {author_tag} {date} del: {reason} ({reference_kind}:{reference_value}) old={old}"
+                .to_string()
+        }
         _ => String::new(),
     }
 }
