@@ -96,6 +96,9 @@ Key patterns:
 - Annotate is the largest workflow in the repo and already contains both rendering logic and normalization/rebuild logic for pending blocks.
 - Built-in file-type categories are defined in `code_file_types.rs` and converted to persisted `file_rules`.
 - Renderer selection, old-code handling, template expansion, and runtime-form prompting all terminate in `annotate.rs`.
+- Segment discovery is text-based: `diff_patch_between_contents()` shells out to `git diff --no-index --unified=0` on temporary baseline/current files, then `parse_hunk_segments()` turns the patch into `Add`/`Modify`/`Delete` segments.
+- A single large `Modify` segment is expected when the new file no longer shares enough unchanged lines with the baseline, including cases caused by comment-wrapping old code, line-ending churn, broad formatter rewrites, or move/copy-heavy edits without stable anchors.
+- When users report that annotate rewrote an entire file for a seemingly small change, debug the incoming diff and segment shape first; the renderer usually reflects the diff it receives rather than inventing additional scope.
 
 ### Terminal setup editor
 

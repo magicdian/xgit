@@ -54,6 +54,9 @@ When a change crosses this boundary:
 - If a render behavior is configurable, it usually spans config schema, setup editing, and annotate runtime logic.
 - File-rule changes must keep builtin code-type catalogs, persisted rules, and renderer selection in sync.
 - Prompt text and validation errors should remain catalog-backed.
+- Treat annotate as a text-diff pipeline, not an AST-aware patcher: it currently computes segments with `git diff --no-index --unified=0` over temporary file contents.
+- If annotate appears to "touch the whole file", first verify whether the input was effectively rewritten at the text level by line-ending normalization, formatter passes, comment-wrapping old code, or low-anchor move/copy edits that collapse into one large modify hunk.
+- Before changing annotate logic, inspect the raw diff shape that feeds the renderer and confirm whether the large output comes from one giant `Modify` segment rather than from block-template expansion bugs.
 
 ### Trellis maintenance layer
 
@@ -80,3 +83,4 @@ When a change crosses this boundary:
 - Remote behavior change: update `xgit/src/remote.rs`, callers in `xgit/src/main.rs`, and `xgit/tests/remote_branch_ops_cli.rs`.
 - Annotate behavior change: update `xgit/src/annotate.rs`, any relevant config or file-type helpers, and the prompt/help strings that explain the behavior.
 - User-visible command/help change: update `build_runtime_command()` plus locale resources before relying on downstream error messages to explain the new behavior.
+- Annotate "whole-file modified" symptom: check raw `git diff` output, line endings, and any preprocessing/formatter step before assuming the renderer is over-expanding a small change.
