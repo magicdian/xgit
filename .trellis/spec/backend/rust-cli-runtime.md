@@ -100,6 +100,53 @@ Key patterns:
 - A single large `Modify` segment is expected when the new file no longer shares enough unchanged lines with the baseline, including cases caused by comment-wrapping old code, line-ending churn, broad formatter rewrites, or move/copy-heavy edits without stable anchors.
 - When users report that annotate rewrote an entire file for a seemingly small change, debug the incoming diff and segment shape first; the renderer usually reflects the diff it receives rather than inventing additional scope.
 
+### Scenario: Newline-stable annotate diffing and on-target diagnostics
+
+#### Scope / Trigger
+- Trigger: annotate is running on repositories that store code files as `CRLF`, and the runtime needs to distinguish real content changes from newline-only churn.
+
+#### Signatures
+- Normalization entrypoint: `normalize_content_before_render(baseline_content, current_content, config, path)`
+- Diff entrypoint: `diff_patch_between_contents(baseline_content, logical_content)`
+- Output entrypoint: `apply_c_line_segments(content, segments, context, config, path)`
+
+#### Contracts
+- `normalize_content_before_render()` must preserve the dominant newline sequence from `current_content`, falling back to `baseline_content`, when rebuilding `logical_content`.
+- `apply_c_line_segments()` must emit updated file content with the same newline sequence and trailing-newline presence as the input file unless the file is intentionally emptied.
+- Debug logs for annotate must report:
+  - candidate file path and change kind
+  - baseline/current/logical content summaries including newline style
+  - patch hunk headers and parsed segment summaries
+- `trace` logging may include a short diff preview, but normal user-facing annotate output must stay unchanged.
+
+#### Validation & Error Matrix
+| Case | Input shape | Expected behavior |
+|------|-------------|-------------------|
+| Base | `CRLF` baseline + `CRLF` current with small edit | parsed patch stays local; no whole-file `Modify` |
+| Good | `LF` baseline + `LF` current with small edit | parsed patch stays local; output remains `LF` |
+| Good | untracked add file | baseline empty, add hunk only |
+| Bad | current rebuilt as `LF` while baseline is `CRLF` | reject as implementation bug; this will collapse into a false whole-file `Modify` |
+
+#### Good / Base / Bad Cases
+- Good: `Bluetooth/BtRfTest.cpp`-style include additions on `CRLF` files should produce several small `Add`/`Modify` hunks instead of one full-file hunk.
+- Base: files without pending annotate blocks should keep `logical_content == current_content` byte-for-byte except for intentional annotation inserts.
+- Bad: logs showing `baseline newline_style=crlf`, `current newline_style=crlf`, but `logical newline_style=lf` indicate a normalization regression.
+
+#### Tests Required
+- Unit test asserting `normalize_content_before_render()` preserves `CRLF` for unchanged newline style.
+- Existing annotate tests must still pass for add / modify / delete / pending-block rebuild paths.
+- Assertion points:
+  - `logical_content` keeps the expected newline sequence
+  - parsed segments remain local for small edits
+  - final rendered output keeps trailing newline semantics
+
+#### Wrong vs Correct
+##### Wrong
+- Rebuild normalized content with `lines.join("\n")`, then diff that against a `CRLF` baseline.
+
+##### Correct
+- Detect the input newline sequence first, rebuild normalized content with that same sequence, and log baseline/current/logical newline summaries when debug logging is enabled.
+
 ### Terminal setup editor
 
 - `xgit/src/setup_ui.rs`
