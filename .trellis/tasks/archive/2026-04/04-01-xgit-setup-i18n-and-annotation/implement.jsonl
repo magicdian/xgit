@@ -1,0 +1,14 @@
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-setup-i18n-and-annotation/task.json","reason":"Task metadata, status, and preserved source provenance"}
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-setup-i18n-and-annotation/prd.md","reason":"Task goal, requirements, and current work scope"}
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-setup-i18n-and-annotation/design.md","reason":"Task-specific design decisions and implementation plan"}
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-setup-i18n-and-annotation/source-tasks.md","reason":"Preserved source checklist and structured task breakdown"}
+{"file":".trellis/tasks/archive/2026-04/04-01-xgit-setup-i18n-and-annotation/source-manifest.yaml","reason":"Preserved source manifest and lifecycle metadata"}
+{"file":".trellis/workflow.md","reason":"Project workflow and conventions"}
+{"file":".trellis/spec/backend/index.md","reason":"Backend guide index for the converted repository"}
+{"file":".trellis/spec/backend/rust-cli-runtime.md","reason":"Grounded backend runtime guide for this repository"}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend or interaction-surface guide index"}
+{"file":".trellis/spec/frontend/terminal-setup-ui.md","reason":"Grounded interaction-surface guide for this repository"}
+{"file":".trellis/spec/guides/pre-implementation-checklist.md","reason":"Trellis-first checklist before changing code"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse and shared-contract checks for conversion-heavy repos"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Cross-layer checks for runtime plus interaction changes"}
+{"file":".trellis/spec/guides/repository-and-conversion-state.md","reason":"Archive semantics and converted-repository maintenance rules"}

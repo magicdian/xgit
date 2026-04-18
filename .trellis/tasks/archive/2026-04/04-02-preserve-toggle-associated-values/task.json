@@ -1,0 +1,123 @@
+{
+  "id": "preserve-toggle-associated-values",
+  "name": "preserve-toggle-associated-values",
+  "title": "preserve toggle associated values",
+  "description": "`menuconfig-setup-navigation` 把 `新增格式`、`修改格式`、`删除格式` 和 `旧代码处理` 拆成了“开关 + 子菜单”的结构，但当前 setup 在关闭这些项时会直接改写它们的关联配置值，而不只是切换启用状态。这会让用户在重新开启后丢失自己编辑过的模板文本或模式选择，导致“开关状态”和“配置值”这两个本应独立的属性发生串扰。 目前已经确认两类具体问题：`add` / `modify` / `del` 模板在关闭时会被重置为默认模板；`旧代码处理` 在关闭后重新开启时会丢失此前选择的 `line_comment` / `block_comment` 模式并退回 legacy 模式。这个问题直接影响 setup 的可预期性，也会让 annotate 的后续输出悄悄偏离用户原本保存的配置。 - 调整 setup 中“开关 + 子菜单”配置项的语义：关闭某项时只能改变该项的启用状态，不得顺带把其关联值恢复为默认值、空值或其他隐式回退值。 - 修正 `新增格式`、`修改格式`、`删除格式` 的开关行为：关闭时仅切换 `enabled`，重新开启时必须保留用户此前编辑过的 `start` / `end` 模板内容。 - 修正 `旧代码处理` 的开关行为：关闭时仅表示该能力当前禁用，重新开启时必须恢复用户关闭前最后一次选中的旧代码模式，而不是固定回到 legacy 模式。 - 对现有 setup 开关项做一次同类审查，并补充回归约束，确保其他开关项不会出现“关闭时覆盖关联值”的同类问题。 <!-- 无 --> - `interactive-setup`: 约束 setup 中带有关联配置值的开关项必须保留其已编辑值，禁止在关闭或重新开启时隐式重置模板、模式或其他子配置。 - `xgit/src/setup_ui.rs` 中开关切换逻辑、旧代码处理启停逻辑以及相关菜单状态管理需要调整。 - `xgit/src/config.rs` 中旧代码处理的配置建模、兼容加载/保存语义可能需要调整，以支持“禁用但保留上次模式”。 - `xgit/src/setup_ui.rs` 的测试需要补充，覆盖模板开关与旧代码处理开关在“关闭 -> 开启”往返后的值保持行为。 - `interactive-setup` 的增量规范需要明确“开关状态”和“关联配置值”解耦的行为契约。",
+  "status": "completed",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "transpec",
+  "assignee": "",
+  "createdAt": "2026-04-02T00:00:00.000Z",
+  "completedAt": "2026-04-02T00:00:00.000Z",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 6,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "1",
+      "name": "1.1 在 `xgit/src/config.rs` 中为旧代码处理拆分“是否启用”和“使用何种模式”的状态表达，支持在禁用时保留最后一次有效模式。",
+      "status": "completed"
+    },
+    {
+      "id": "2",
+      "name": "1.2 为旧代码处理补充历史配置兼容读取与保存语义，确保旧配置中的禁用写法仍能被正确加载。",
+      "status": "completed"
+    },
+    {
+      "id": "3",
+      "name": "2.1 更新 `xgit/src/setup_ui.rs` 中 `新增格式`、`修改格式`、`删除格式` 的开关逻辑，使其在关闭和重新开启时只切换启用状态而不重置模板文本。",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "name": "2.2 更新 `xgit/src/setup_ui.rs` 中 `旧代码处理` 的开关逻辑，使其在重新开启时恢复关闭前最后一次有效模式，而不是固定回退到 legacy 模式。",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "name": "2.3 审查 setup 中其他现有 toggle 项的实现分支，确认不存在额外的“关闭时覆盖关联值”逻辑，并把必要的保护逻辑抽成一致约束。",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "name": "3.1 为 `add` / `modify` / `del` 模板开关补充测试，覆盖“编辑模板 -> 关闭 -> 重新开启”后模板值保持不变。",
+      "status": "completed"
+    },
+    {
+      "id": "7",
+      "name": "3.2 为 `旧代码处理` 补充测试，覆盖“选择模式 -> 关闭 -> 保存/重载 -> 重新开启”后模式保持不变。",
+      "status": "completed"
+    },
+    {
+      "id": "8",
+      "name": "3.3 运行 setup / config 相关测试集，确认其他开关项没有引入新的回归。",
+      "status": "completed"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Imported from source change: openspec/changes/archive/2026-04-02-preserve-toggle-associated-values/proposal.md",
+  "meta": {
+    "convertedFrom": "openspec",
+    "originalExtendedType": "change",
+    "sourceFramework": "openspec",
+    "sourcePath": "openspec/changes/archive/2026-04-02-preserve-toggle-associated-values/proposal.md",
+    "sourceCreatedAt": "2026-04-02T00:00:00.000Z",
+    "sourceUpdatedAt": "2026-04-02T00:00:00.000Z",
+    "sourceArchivedAt": null,
+    "sourceStatus": null,
+    "importedAt": "2026-04-17T10:49:21.823Z",
+    "isArchived": true,
+    "preservedSourceFiles": {
+      "tasksMd": "source-tasks.md",
+      "manifestYaml": "source-manifest.yaml",
+      "designMd": "design.md"
+    },
+    "sourceTaskSummary": null,
+    "sourceAcceptanceCriteria": [],
+    "sourceFollowUpSuggestions": [],
+    "sourceTaskEstimates": [],
+    "sourceTaskSections": [
+      {
+        "title": "1. 调整配置与状态建模",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "1.1 在 `xgit/src/config.rs` 中为旧代码处理拆分“是否启用”和“使用何种模式”的状态表达，支持在禁用时保留最后一次有效模式。",
+          "1.2 为旧代码处理补充历史配置兼容读取与保存语义，确保旧配置中的禁用写法仍能被正确加载。"
+        ]
+      },
+      {
+        "title": "2. 修正 setup 开关行为",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "2.1 更新 `xgit/src/setup_ui.rs` 中 `新增格式`、`修改格式`、`删除格式` 的开关逻辑，使其在关闭和重新开启时只切换启用状态而不重置模板文本。",
+          "2.2 更新 `xgit/src/setup_ui.rs` 中 `旧代码处理` 的开关逻辑，使其在重新开启时恢复关闭前最后一次有效模式，而不是固定回退到 legacy 模式。",
+          "2.3 审查 setup 中其他现有 toggle 项的实现分支，确认不存在额外的“关闭时覆盖关联值”逻辑，并把必要的保护逻辑抽成一致约束。"
+        ]
+      },
+      {
+        "title": "3. 补充回归验证",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "3.1 为 `add` / `modify` / `del` 模板开关补充测试，覆盖“编辑模板 -> 关闭 -> 重新开启”后模板值保持不变。",
+          "3.2 为 `旧代码处理` 补充测试，覆盖“选择模式 -> 关闭 -> 保存/重载 -> 重新开启”后模式保持不变。",
+          "3.3 运行 setup / config 相关测试集，确认其他开关项没有引入新的回归。"
+        ]
+      }
+    ]
+  }
+}

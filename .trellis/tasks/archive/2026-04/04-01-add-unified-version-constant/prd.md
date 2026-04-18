@@ -1,0 +1,26 @@
+> Imported historical task context normalized by Transpec for Trellis-first continuation. Use `.trellis/spec/` as the current source of truth; preserved source artifacts remain for provenance.
+
+## 为什么
+
+当前版本号信息缺少统一来源，容易在多个位置出现硬编码，导致更新版本时需要重复修改并带来不一致风险。既然项目本身已有 `Cargo.toml` 的 `package.version`，最稳妥的方式是把它作为唯一版本来源并让 CLI 展示与之保持一致。
+
+## 变更内容
+
+- 以 `Cargo.toml` 的 `package.version` 作为项目版本号单一来源。
+- CLI 版本展示（如 `xgit --version`）统一读取 Cargo 包版本信息，不再使用独立硬编码字符串。
+- 清理并约束版本号的多点定义：后续新增代码不得直接硬编码版本号字面量。
+- `YYMM.DD.BuildNumber` 作为推荐命名约定，最终以 Cargo 可接受版本格式落地。
+- 本次版本值采用方案 2 的 Cargo 兼容写法：`2604.1.2`（语义对应 `2604.01.2`）。
+
+## 功能 (Capabilities)
+
+### 新增功能
+- `versioning-source-unification`: 定义版本单一来源为 `Cargo.toml`，并要求全链路通过该来源读取版本信息。
+
+### 修改功能
+
+## 影响
+
+- 受影响代码：CLI 入口/版本展示路径、版本访问封装代码、相关测试。
+- 受影响行为：版本号来源从分散硬编码切换为 Cargo 元数据单一来源。
+- 受影响流程：每次发版仅需维护 `Cargo.toml` 的 `package.version` 一处。

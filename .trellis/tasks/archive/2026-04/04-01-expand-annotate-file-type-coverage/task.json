@@ -1,0 +1,129 @@
+{
+  "id": "expand-annotate-file-type-coverage",
+  "name": "expand-annotate-file-type-coverage",
+  "title": "expand annotate file type coverage",
+  "description": "当前内置代码文件类型目录只覆盖 `.c`、`.h`、`.cpp`、`.java`、`.js`、`.rs` 和 `.kt`，这让不少实际代码文件会在 `xgit annotate` 中被直接跳过，例如用户已经遇到的 `*.hpp`。既然 setup 已经把“代码文件类型”作为结构化入口暴露出来，就应该尽快把当前已接入语言族中的常见代码扩展名补齐，避免“明明是代码文件却提示未匹配规则”的体验落差。 - 审计当前内置代码文件类型目录，仅聚焦“代码文件”范围，明确将 `Android.bp` 等构建/配置文件排除在本次变更之外。 - 扩充现有已接入语言分类中的内置扩展名覆盖，重点补齐当前明显缺失但属于代码文件的常见变体，例如 C/C++ 的头文件/实现文件扩展名变体，以及 JavaScript、Kotlin 家族中的常见脚本或模块代码扩展名。 - 调整 setup 的代码文件类型选择器、默认规则集和配置回写逻辑，使扩展后的内置类型可以被正确展示、选择、保存和回读，同时继续保留未知自定义规则。 - 为新增文件类型匹配补充回归测试，并把项目版本更新为 `2604.1.3`。 <!-- 无 --> - `interactive-setup`: 代码文件类型选择器需要展示更完整的内置代码扩展名集合，并保持结构化选择与 `annotate.file_rules` 的双向映射稳定。 - `annotation-normalization`: 文件规则匹配需要覆盖扩充后的代码文件扩展名集合，确保这些代码文件会进入现有行注释块渲染流程而不是被误跳过。 - `versioning-source-unification`: 本次发版目标需要更新为 `2604.1.3`，并继续要求版本信息统一来源于 `Cargo.toml` 的 `package.version`。 - `xgit/src/code_file_types.rs` 需要扩展内置分类条目与默认选择统计。 - `xgit/src/config.rs` 与 `xgit/config/default.toml` 需要同步扩充默认 `annotate.file_rules` 并更新版本号来源值。 - `xgit/src/setup_ui.rs`、多语言资源和相关测试需要更新，以适配新增的文件类型展示与回写结果。 - 注释匹配回归测试与版本输出测试需要补充或更新，确保新增代码格式可识别且 `--version` 输出为 `2604.1.3`。",
+  "status": "completed",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "transpec",
+  "assignee": "",
+  "createdAt": "2026-04-01T00:00:00.000Z",
+  "completedAt": "2026-04-01T00:00:00.000Z",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 6,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "1",
+      "name": "1.1 在 `xgit/src/code_file_types.rs` 中补齐现有五个语言分类的常见代码扩展名条目，并保持 `c_line_block` 映射不变",
+      "status": "completed"
+    },
+    {
+      "id": "2",
+      "name": "1.2 更新代码文件类型选择器相关的中英文文案与摘要统计，确保新增条目能在 setup 中正确展示",
+      "status": "completed"
+    },
+    {
+      "id": "3",
+      "name": "1.3 保持分类默认选择语义不变，确认新增的 C/C++ 条目会随默认分类一起启用，而非代码文件不会被纳入内置目录",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "name": "2.1 更新 `xgit/src/config.rs` 与 `xgit/config/default.toml` 中的默认 `annotate.file_rules`，使其与扩充后的内置目录保持一致",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "name": "2.2 验证 setup 的结构化选择与 `annotate.file_rules` 回写/回读仍然稳定，并继续保留未知自定义规则",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "name": "2.3 验证 `annotate` 对新增代码扩展名（如 `*.hpp`、`*.mjs`、`*.kts`）不再报“未匹配到文件规则”，同时 `Android.bp` 仍默认不识别",
+      "status": "completed"
+    },
+    {
+      "id": "7",
+      "name": "3.1 补充或更新 `code_file_types`、setup UI 与 annotate 相关测试，覆盖新增扩展名的选择、映射和默认排除行为",
+      "status": "completed"
+    },
+    {
+      "id": "8",
+      "name": "3.2 将 `xgit/Cargo.toml`（及必要的锁文件/文档/版本测试）更新到 `2604.1.3`，并确保 CLI 版本输出继续来自 Cargo 版本来源",
+      "status": "completed"
+    },
+    {
+      "id": "9",
+      "name": "3.3 运行相关回归验证，确认扩展后的代码文件目录、默认规则和版本输出全部符合新规范",
+      "status": "completed"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Imported from source change: openspec/changes/archive/2026-04-01-expand-annotate-file-type-coverage/proposal.md",
+  "meta": {
+    "convertedFrom": "openspec",
+    "originalExtendedType": "change",
+    "sourceFramework": "openspec",
+    "sourcePath": "openspec/changes/archive/2026-04-01-expand-annotate-file-type-coverage/proposal.md",
+    "sourceCreatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceUpdatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceArchivedAt": null,
+    "sourceStatus": null,
+    "importedAt": "2026-04-17T10:49:21.806Z",
+    "isArchived": true,
+    "preservedSourceFiles": {
+      "tasksMd": "source-tasks.md",
+      "manifestYaml": "source-manifest.yaml",
+      "designMd": "design.md"
+    },
+    "sourceTaskSummary": null,
+    "sourceAcceptanceCriteria": [],
+    "sourceFollowUpSuggestions": [],
+    "sourceTaskEstimates": [],
+    "sourceTaskSections": [
+      {
+        "title": "1. 扩充内置代码文件类型目录",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "1.1 在 `xgit/src/code_file_types.rs` 中补齐现有五个语言分类的常见代码扩展名条目，并保持 `c_line_block` 映射不变",
+          "1.2 更新代码文件类型选择器相关的中英文文案与摘要统计，确保新增条目能在 setup 中正确展示",
+          "1.3 保持分类默认选择语义不变，确认新增的 C/C++ 条目会随默认分类一起启用，而非代码文件不会被纳入内置目录"
+        ]
+      },
+      {
+        "title": "2. 同步默认规则与注释匹配行为",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "2.1 更新 `xgit/src/config.rs` 与 `xgit/config/default.toml` 中的默认 `annotate.file_rules`，使其与扩充后的内置目录保持一致",
+          "2.2 验证 setup 的结构化选择与 `annotate.file_rules` 回写/回读仍然稳定，并继续保留未知自定义规则",
+          "2.3 验证 `annotate` 对新增代码扩展名（如 `*.hpp`、`*.mjs`、`*.kts`）不再报“未匹配到文件规则”，同时 `Android.bp` 仍默认不识别"
+        ]
+      },
+      {
+        "title": "3. 测试与版本更新",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "3.1 补充或更新 `code_file_types`、setup UI 与 annotate 相关测试，覆盖新增扩展名的选择、映射和默认排除行为",
+          "3.2 将 `xgit/Cargo.toml`（及必要的锁文件/文档/版本测试）更新到 `2604.1.3`，并确保 CLI 版本输出继续来自 Cargo 版本来源",
+          "3.3 运行相关回归验证，确认扩展后的代码文件目录、默认规则和版本输出全部符合新规范"
+        ]
+      }
+    ]
+  }
+}

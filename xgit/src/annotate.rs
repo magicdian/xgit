@@ -7,9 +7,12 @@ use crate::config::{
 use crate::i18n::Catalog;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{Local, NaiveDateTime};
+use log::{debug, log_enabled, trace, Level};
 use regex::Regex;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -173,6 +176,23 @@ pub fn run(
         collect_staged_changes(&repo_root, include_untracked)?
     };
 
+    debug!(
+        "annotate start cwd={} repo_root={} latest_commit={} include_untracked_override={:?} change_count={}",
+        cwd.display(),
+        repo_root.display(),
+        options.latest_commit,
+        options.include_untracked_override,
+        changes.len()
+    );
+    if log_enabled!(Level::Debug) {
+        for change in &changes {
+            debug!(
+                "annotate candidate path={} kind={:?} from_untracked={}",
+                change.path, change.kind, change.from_untracked
+            );
+        }
+    }
+
     if changes.is_empty() {
         println!("{}", catalog.t("status.annotate.no_changes"));
         return Ok(());
@@ -183,13 +203,8 @@ pub fn run(
     let mut unformatted = Vec::<UnformattedFile>::new();
 
     for change in &changes {
-        match process_candidate_change(
-            change,
-            options.latest_commit,
-            config,
-            catalog,
-            &repo_root,
-        )? {
+        match process_candidate_change(change, options.latest_commit, config, catalog, &repo_root)?
+        {
             CandidateProcessResult::Prepared {
                 mut file,
                 context_candidates: file_context_candidates,
@@ -247,7 +262,7 @@ pub fn run(
         let updated = apply_c_line_segments(
             &file.logical_content,
             &file.segments,
-            &context,
+            context,
             config,
             &file.change.path,
         );
@@ -287,7 +302,8 @@ fn process_candidate_change(
                 );
             }
 
-            let Some(current_content) = load_target_content(repo_root, latest_commit, change)? else {
+            let Some(current_content) = load_target_content(repo_root, latest_commit, change)?
+            else {
                 return Ok(CandidateProcessResult::Unformatted(UnformattedFile {
                     path: change.path.clone(),
                     reason: UnformattedReason::NoTargetContent,
@@ -307,6 +323,15 @@ fn process_candidate_change(
                     &[("path", change.path.clone())],
                 )
             })?;
+            log_change_debug(
+                change,
+                latest_commit,
+                &baseline_content,
+                &current_content,
+                &normalized.logical_content,
+                &normalized.segments,
+                &normalized.context_candidates,
+            );
 
             Ok(CandidateProcessResult::Prepared {
                 file: PreparedCLineFile {
@@ -351,9 +376,8 @@ fn format_unformatted_reason(reason: &UnformattedReason, catalog: &Catalog) -> S
         UnformattedReason::NoTargetContent => {
             catalog.t("status.annotate.unformatted_reason.no_target_content")
         }
-        UnformattedReason::DeleteRequiresDelTemplateAndOldCode => catalog.t(
-            "status.annotate.unformatted_reason.delete_requires_del_template_and_old_code",
-        ),
+        UnformattedReason::DeleteRequiresDelTemplateAndOldCode => catalog
+            .t("status.annotate.unformatted_reason.delete_requires_del_template_and_old_code"),
     }
 }
 
@@ -479,8 +503,14 @@ fn collect_runtime_context(
             );
             if prompt_yes_no(&prompt, true)? {
                 values.insert("reason".to_string(), defaults.reason.clone());
-                values.insert("reference_kind".to_string(), defaults.reference_kind.clone());
-                values.insert("reference_value".to_string(), defaults.reference_value.clone());
+                values.insert(
+                    "reference_kind".to_string(),
+                    defaults.reference_kind.clone(),
+                );
+                values.insert(
+                    "reference_value".to_string(),
+                    defaults.reference_value.clone(),
+                );
                 reused_context = true;
             }
         }
@@ -515,7 +545,9 @@ fn collect_runtime_context(
                 let mut candidate_value = current.clone();
                 if !candidate_value.is_empty()
                     && !candidates.is_empty()
-                    && !candidates.iter().any(|candidate| candidate == &candidate_value)
+                    && !candidates
+                        .iter()
+                        .any(|candidate| candidate == &candidate_value)
                 {
                     if reused_context && field.id == "reference_kind" {
                         let retry = prompt_line(&field_prompt(catalog, config, field))?;
@@ -542,7 +574,9 @@ fn collect_runtime_context(
                 }
                 if !candidate_value.is_empty()
                     && !candidates.is_empty()
-                    && !candidates.iter().any(|candidate| candidate == &candidate_value)
+                    && !candidates
+                        .iter()
+                        .any(|candidate| candidate == &candidate_value)
                 {
                     bail!(
                         "{}",
@@ -754,6 +788,7 @@ fn normalize_content_before_render(
     config: &AppConfig,
     path: &str,
 ) -> Result<NormalizationResult> {
+    let newline_sequence = preferred_newline_sequence(current_content, baseline_content);
     let mut current_lines = current_content
         .lines()
         .map(std::string::ToString::to_string)
@@ -790,22 +825,256 @@ fn normalize_content_before_render(
         let normalized_lines = restore_pending_blocks(&current_lines, &pending, path)?;
         current_lines = normalized_lines;
     }
+    debug!(
+        "annotate normalize path={} block_patterns={} pending_blocks={} reusable_context_candidates={}",
+        path,
+        block_patterns.len(),
+        pending.len(),
+        context_candidates.len()
+    );
 
     let logical_content = if current_lines.is_empty() {
         String::new()
     } else {
-        let mut content = current_lines.join("\n");
-        if current_content.ends_with('\n') {
-            content.push('\n');
-        }
-        content
+        rebuild_content_with_newlines(
+            &current_lines,
+            has_trailing_line_ending(current_content),
+            newline_sequence,
+        )
     };
-    let segments = diff_segments_between_contents(baseline_content, &logical_content)?;
+    let patch = diff_patch_between_contents(baseline_content, &logical_content)?;
+    let segments = parse_hunk_segments(&patch);
+    log_diff_debug(path, &patch, &segments);
     Ok(NormalizationResult {
         logical_content,
         segments,
         context_candidates,
     })
+}
+
+fn log_change_debug(
+    change: &FileChange,
+    latest_commit: bool,
+    baseline_content: &str,
+    current_content: &str,
+    logical_content: &str,
+    segments: &[HunkSegment],
+    context_candidates: &[ContextReuseCandidate],
+) {
+    if !log_enabled!(Level::Debug) {
+        return;
+    }
+
+    debug!(
+        "annotate prepared path={} kind={:?} latest_commit={} from_untracked={} baseline={} current={} logical={} segments={} contexts={}",
+        change.path,
+        change.kind,
+        latest_commit,
+        change.from_untracked,
+        content_debug_summary(baseline_content),
+        content_debug_summary(current_content),
+        content_debug_summary(logical_content),
+        segment_summary(segments),
+        context_candidate_summary(context_candidates),
+    );
+}
+
+fn log_diff_debug(path: &str, patch: &str, segments: &[HunkSegment]) {
+    if !log_enabled!(Level::Debug) {
+        return;
+    }
+
+    debug!(
+        "annotate diff path={} patch={} segments={}",
+        path,
+        patch_debug_summary(patch),
+        segment_summary(segments)
+    );
+
+    if log_enabled!(Level::Trace) {
+        let preview = patch.lines().take(40).collect::<Vec<_>>().join("\\n");
+        trace!("annotate diff preview path={} {}", path, preview);
+    }
+}
+
+fn content_debug_summary(content: &str) -> String {
+    let (crlf_count, lf_count, cr_count) = newline_counts(content);
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    format!(
+        "bytes={} lines={} trailing_newline={} newline_style={} crlf={} lf={} cr={} hash={:016x}",
+        content.len(),
+        content.lines().count(),
+        content.ends_with('\n'),
+        newline_style_label(crlf_count, lf_count, cr_count),
+        crlf_count,
+        lf_count,
+        cr_count,
+        hasher.finish()
+    )
+}
+
+fn patch_debug_summary(patch: &str) -> String {
+    let headers = patch
+        .lines()
+        .filter(|line| line.starts_with("@@"))
+        .take(8)
+        .collect::<Vec<_>>();
+    let header_summary = if headers.is_empty() {
+        "none".to_string()
+    } else {
+        headers.join(" | ")
+    };
+    format!(
+        "bytes={} lines={} hunks={} headers={}",
+        patch.len(),
+        patch.lines().count(),
+        patch.lines().filter(|line| line.starts_with("@@")).count(),
+        header_summary
+    )
+}
+
+fn segment_summary(segments: &[HunkSegment]) -> String {
+    if segments.is_empty() {
+        return "count=0".to_string();
+    }
+
+    let largest = segments
+        .iter()
+        .map(|segment| segment.old_lines.len().max(segment.new_lines.len()))
+        .max()
+        .unwrap_or(0);
+    let entries = segments
+        .iter()
+        .take(12)
+        .enumerate()
+        .map(|(idx, segment)| {
+            format!(
+                "#{}:{:?}@{} old={} new={}",
+                idx,
+                segment.kind,
+                segment.start_line,
+                segment.old_lines.len(),
+                segment.new_lines.len()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "count={} largest_span={} entries=[{}{}]",
+        segments.len(),
+        largest,
+        entries,
+        if segments.len() > 12 { ", ..." } else { "" }
+    )
+}
+
+fn context_candidate_summary(context_candidates: &[ContextReuseCandidate]) -> String {
+    if context_candidates.is_empty() {
+        return "count=0".to_string();
+    }
+
+    let entries = context_candidates
+        .iter()
+        .take(5)
+        .enumerate()
+        .map(|(idx, candidate)| {
+            format!(
+                "#{}:reason={:?} kind={:?} value={:?}",
+                idx, candidate.reason, candidate.reference_kind, candidate.reference_value
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "count={} entries=[{}{}]",
+        context_candidates.len(),
+        entries,
+        if context_candidates.len() > 5 {
+            ", ..."
+        } else {
+            ""
+        }
+    )
+}
+
+fn newline_counts(content: &str) -> (usize, usize, usize) {
+    let bytes = content.as_bytes();
+    let mut index = 0usize;
+    let mut crlf = 0usize;
+    let mut lf = 0usize;
+    let mut cr = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' if index + 1 < bytes.len() && bytes[index + 1] == b'\n' => {
+                crlf += 1;
+                index += 2;
+            }
+            b'\n' => {
+                lf += 1;
+                index += 1;
+            }
+            b'\r' => {
+                cr += 1;
+                index += 1;
+            }
+            _ => {
+                index += 1;
+            }
+        }
+    }
+    (crlf, lf, cr)
+}
+
+fn newline_style_label(crlf_count: usize, lf_count: usize, cr_count: usize) -> &'static str {
+    match (crlf_count > 0, lf_count > 0, cr_count > 0) {
+        (false, false, false) => "none",
+        (true, false, false) => "crlf",
+        (false, true, false) => "lf",
+        (false, false, true) => "cr",
+        _ => "mixed",
+    }
+}
+
+fn preferred_newline_sequence(primary: &str, fallback: &str) -> &'static str {
+    detect_newline_sequence(primary)
+        .or_else(|| detect_newline_sequence(fallback))
+        .unwrap_or("\n")
+}
+
+fn detect_newline_sequence(content: &str) -> Option<&'static str> {
+    let (crlf_count, lf_count, cr_count) = newline_counts(content);
+    if crlf_count == 0 && lf_count == 0 && cr_count == 0 {
+        return None;
+    }
+    if crlf_count >= lf_count && crlf_count >= cr_count {
+        Some("\r\n")
+    } else if lf_count >= cr_count {
+        Some("\n")
+    } else {
+        Some("\r")
+    }
+}
+
+fn has_trailing_line_ending(content: &str) -> bool {
+    content.ends_with('\n') || content.ends_with('\r')
+}
+
+fn rebuild_content_with_newlines(
+    lines: &[String],
+    trailing_newline: bool,
+    newline_sequence: &str,
+) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut content = lines.join(newline_sequence);
+    if trailing_newline {
+        content.push_str(newline_sequence);
+    }
+    content
 }
 
 fn build_block_patterns(config: &AppConfig) -> Result<Vec<BlockPattern>> {
@@ -945,7 +1214,10 @@ fn find_candidate_blocks(
         }
         matches.sort_by_key(|(pattern, _, _)| std::cmp::Reverse(pattern.start_lines.len()));
         let (pattern, indent, mut context_candidate) = matches.remove(0);
-        normalize_context_candidate(&mut context_candidate, config.annotate.reference_kind_values());
+        normalize_context_candidate(
+            &mut context_candidate,
+            config.annotate.reference_kind_values(),
+        );
         let start_len = pattern.start_lines.len();
         let search_start = line_idx + start_len;
         let Some(end_start) = find_matching_end(lines, search_start, pattern, &indent) else {
@@ -1660,7 +1932,8 @@ fn apply_c_line_segments(
     config: &AppConfig,
     path: &str,
 ) -> String {
-    let trailing_newline = content.ends_with('\n');
+    let trailing_newline = has_trailing_line_ending(content);
+    let newline_sequence = preferred_newline_sequence(content, "");
     let mut lines = content
         .lines()
         .map(|line| line.to_string())
@@ -1699,11 +1972,7 @@ fn apply_c_line_segments(
         return String::new();
     }
 
-    let mut output = lines.join("\n");
-    if trailing_newline {
-        output.push('\n');
-    }
-    output
+    rebuild_content_with_newlines(&lines, trailing_newline, newline_sequence)
 }
 
 fn render_c_line_block(
@@ -1750,7 +2019,8 @@ fn render_c_line_block(
         .lines()
         .map(|line| format!("{}{}", comment_indent, line))
         .collect::<Vec<_>>();
-    if !suppress_old_code && (segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete)
+    if !suppress_old_code
+        && (segment.kind == ChangeKind::Modify || segment.kind == ChangeKind::Delete)
     {
         match explicit_old_code_mode {
             Some(AnnotateOldCodeMode::None) => {}
@@ -2030,14 +2300,14 @@ mod tests {
         collect_latest_commit_changes, collect_runtime_context, collect_staged_changes,
         decide_segment_render, git_stdout, load_baseline_content, matches_pattern,
         normalize_content_before_render, parse_hunk_segments, parse_name_status_output,
-        resolve_reusable_context_defaults, run, select_renderer, ChangeKind,
-        ContextReuseCandidate, FileChange, HunkSegment, RuntimeContext, SegmentRenderDecision,
-        UnformattedFile, UnformattedReason,
+        resolve_reusable_context_defaults, run, select_renderer, ChangeKind, ContextReuseCandidate,
+        FileChange, HunkSegment, RuntimeContext, SegmentRenderDecision, UnformattedFile,
+        UnformattedReason,
     };
     use crate::code_file_types::{default_selected_keys, file_rules_from_selection};
     use crate::config::{
-        load_runtime_config, merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode, AppConfig,
-        LoadConfigOptions,
+        load_runtime_config, merge_layers, AnnotateOldCodeLineLayout, AnnotateOldCodeMode,
+        AppConfig, LoadConfigOptions,
     };
     use chrono::NaiveDateTime;
     use std::collections::{BTreeMap, HashMap};
@@ -2086,6 +2356,54 @@ index a1b2c3d..e4f5a6b 100644
         assert_eq!(segments[0].kind, ChangeKind::Modify);
         assert_eq!(segments[0].old_lines, vec!["int a = 1;".to_string()]);
         assert_eq!(segments[0].new_lines, vec!["int a = 2;".to_string()]);
+    }
+
+    #[test]
+    fn newline_counts_detect_mixed_line_endings() {
+        let content = "a\r\nb\nc\rd";
+        assert_eq!(super::newline_counts(content), (1, 1, 1));
+        assert_eq!(super::newline_style_label(1, 1, 1), "mixed");
+    }
+
+    #[test]
+    fn segment_summary_reports_large_modify_shape() {
+        let summary = super::segment_summary(&[HunkSegment {
+            start_line: 1,
+            kind: ChangeKind::Modify,
+            old_lines: vec!["old".to_string(); 540],
+            new_lines: vec!["new".to_string(); 1086],
+        }]);
+        assert!(summary.contains("count=1"));
+        assert!(summary.contains("largest_span=1086"));
+        assert!(summary.contains("Modify@1"));
+        assert!(summary.contains("old=540"));
+        assert!(summary.contains("new=1086"));
+    }
+
+    #[test]
+    fn normalize_content_preserves_crlf_style_when_no_pending_blocks() {
+        let cfg = AppConfig::default();
+        let baseline = "#define LOG_TAG \"BtRfTest\"\r\n\r\nint a = 1;\r\n";
+        let current = "#define LOG_TAG \"BtRfTest\"\r\n\r\nint a = 2;\r\n";
+
+        let normalized =
+            normalize_content_before_render(baseline, current, &cfg, "BtRfTest.cpp").unwrap();
+
+        assert_eq!(normalized.logical_content, current);
+        assert_eq!(
+            super::detect_newline_sequence(&normalized.logical_content),
+            Some("\r\n")
+        );
+        assert_eq!(normalized.segments.len(), 1);
+        assert_eq!(normalized.segments[0].kind, ChangeKind::Modify);
+        assert_eq!(
+            normalized.segments[0].old_lines,
+            vec!["int a = 1;".to_string()]
+        );
+        assert_eq!(
+            normalized.segments[0].new_lines,
+            vec!["int a = 2;".to_string()]
+        );
     }
 
     #[test]
@@ -2330,7 +2648,13 @@ end = "//@}"
         let content = "\n    int value = 42;\n\n";
 
         cfg.annotate.render.wrap_blank_lines = true;
-        let wrapped = apply_c_line_segments(content, &[segment.clone()], &context, &cfg, "demo.c");
+        let wrapped = apply_c_line_segments(
+            content,
+            std::slice::from_ref(&segment),
+            &context,
+            &cfg,
+            "demo.c",
+        );
         assert!(wrapped
             .lines()
             .next()
@@ -2457,7 +2781,7 @@ end = "//@}"
         };
         let updated = apply_c_line_segments(
             "",
-            &[segment.clone()],
+            std::slice::from_ref(&segment),
             &test_runtime_context("why", "bug", "ID-1", "QA", "2026-04-01"),
             &cfg,
             "demo.c",

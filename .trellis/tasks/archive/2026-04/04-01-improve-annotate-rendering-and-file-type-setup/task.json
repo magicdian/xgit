@@ -1,0 +1,167 @@
+{
+  "id": "improve-annotate-rendering-and-file-type-setup",
+  "name": "improve-annotate-rendering-and-file-type-setup",
+  "title": "improve annotate rendering and file type setup",
+  "description": "`xgit annotate` 目前会把注释固定插在行首，并且默认包裹变更块中的空行，导致生成结果和原代码排版不一致，降低了自动化注释在真实代码中的可读性。与此同时，`xgit setup` 仍然把代码文件类型暴露为 `pattern=renderer;...` 的原始字符串编辑方式，这和现有 menuconfig 风格界面不一致，也不利于后续扩展更多语言分类。 - 为注释渲染新增可配置行为，允许用户决定注释是否跟随被包裹代码的缩进对齐。 - 为注释渲染新增可配置行为，允许用户决定是否包裹变更块中的空白行，而不是固定把空行包含在注释块内部。 - 调整 `xgit setup` 的注释配置界面，把“文件规则 (pattern=renderer;...)”替换为更直观的“代码文件类型”结构化选择。 - 为代码文件类型选择引入按语言分类的层级导航，支持在分类层显示全选、部分选中和未选中的状态，并在分类内部选择具体扩展名。 - 在第一阶段预置 `C/C++`、`Java`、`JavaScript`、`Rust` 和 `Kotlin` 五个分类，其中默认启用 `C/C++` 和 `Java`，并保持未来继续扩展语言分类的能力。 - 保持现有文件规则到渲染器的执行模型不变，但要求 setup 负责把结构化语言/扩展名选择映射回有效的注释文件规则。 <!-- 无 --> - `interactive-setup`: 注释配置栏目需要支持层级化的代码文件类型选择，并暴露注释缩进与空行包裹相关开关，替代原始文件规则字符串编辑体验。 - `annotation-normalization`: 注释渲染结果需要受缩进对齐和空行包裹策略控制，并根据 setup 维护的代码文件类型集合决定哪些文件参与 C-like 渲染器分发。 - `xgit/src/setup_ui.rs` 将从单纯的文本编辑模式扩展为支持层级选择弹窗和部分选中状态的交互模型。 - `xgit/src/config.rs` 与默认配置需要增加注释渲染选项，并承载结构化代码文件类型选择的配置表达。 - `xgit/src/annotate.rs` 的渲染逻辑需要根据有效配置决定注释缩进和空行包裹行为。 - 语言资源、setup 交互测试、配置读写测试和注释渲染测试都需要补充新的回归覆盖。",
+  "status": "completed",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "transpec",
+  "assignee": "",
+  "createdAt": "2026-04-01T00:00:00.000Z",
+  "completedAt": "2026-04-01T00:00:00.000Z",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 6,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "1",
+      "name": "1.1 为 `annotate` 增加渲染选项配置模型、默认值和序列化支持，并补充配置读写测试",
+      "status": "completed"
+    },
+    {
+      "id": "2",
+      "name": "1.2 建立内置代码文件类型目录，定义语言分类、扩展名、pattern 和 renderer 的映射关系",
+      "status": "completed"
+    },
+    {
+      "id": "3",
+      "name": "1.3 实现“结构化代码文件类型选择 ↔ `annotate.file_rules`”的双向转换，并确保未知自定义规则在转换后仍被保留",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "name": "2.1 将 setup 注释栏目中的原始文件规则文本项替换为“代码文件类型”摘要展示",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "name": "2.2 为 setup 增加代码文件类型层级选择器，支持分类层 Enter 进入、Space 批量切换和叶子层单项切换",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "name": "2.3 在代码文件类型选择器中实现分类三态汇总显示，并设置默认启用 `C/C++` 与 `Java`",
+      "status": "completed"
+    },
+    {
+      "id": "7",
+      "name": "2.4 在 setup 注释栏目中加入注释缩进对齐和空白行包裹两个开关项",
+      "status": "completed"
+    },
+    {
+      "id": "8",
+      "name": "2.5 更新 setup 相关语言资源与状态提示，使用“代码文件类型”等新文案替代原始文件规则字符串描述",
+      "status": "completed"
+    },
+    {
+      "id": "9",
+      "name": "3.1 调整 `annotate` 渲染逻辑，在启用缩进对齐时按目标代码块的有效缩进生成注释前后缀",
+      "status": "completed"
+    },
+    {
+      "id": "10",
+      "name": "3.2 调整变更块包裹逻辑，在关闭空白行包裹时仅围绕有效代码部分建立注释边界",
+      "status": "completed"
+    },
+    {
+      "id": "11",
+      "name": "3.3 让内置代码文件类型目录中启用的语言类型都能映射到有效的行注释块渲染器分发结果",
+      "status": "completed"
+    },
+    {
+      "id": "12",
+      "name": "4.1 为 setup 代码文件类型选择器补充状态机测试，覆盖默认选中、层级导航、部分选中和保存映射",
+      "status": "completed"
+    },
+    {
+      "id": "13",
+      "name": "4.2 为注释渲染补充回归测试，覆盖缩进对齐开启/关闭和空白行包裹开启/关闭两组行为",
+      "status": "completed"
+    },
+    {
+      "id": "14",
+      "name": "4.3 更新 README、帮助示例和相关文案说明，解释新的代码文件类型选择方式与注释渲染选项",
+      "status": "completed"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Imported from source change: openspec/changes/archive/2026-04-01-improve-annotate-rendering-and-file-type-setup/proposal.md",
+  "meta": {
+    "convertedFrom": "openspec",
+    "originalExtendedType": "change",
+    "sourceFramework": "openspec",
+    "sourcePath": "openspec/changes/archive/2026-04-01-improve-annotate-rendering-and-file-type-setup/proposal.md",
+    "sourceCreatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceUpdatedAt": "2026-04-01T00:00:00.000Z",
+    "sourceArchivedAt": null,
+    "sourceStatus": null,
+    "importedAt": "2026-04-17T10:49:21.807Z",
+    "isArchived": true,
+    "preservedSourceFiles": {
+      "tasksMd": "source-tasks.md",
+      "manifestYaml": "source-manifest.yaml",
+      "designMd": "design.md"
+    },
+    "sourceTaskSummary": null,
+    "sourceAcceptanceCriteria": [],
+    "sourceFollowUpSuggestions": [],
+    "sourceTaskEstimates": [],
+    "sourceTaskSections": [
+      {
+        "title": "1. 配置模型与内置目录",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "1.1 为 `annotate` 增加渲染选项配置模型、默认值和序列化支持，并补充配置读写测试",
+          "1.2 建立内置代码文件类型目录，定义语言分类、扩展名、pattern 和 renderer 的映射关系",
+          "1.3 实现“结构化代码文件类型选择 ↔ `annotate.file_rules`”的双向转换，并确保未知自定义规则在转换后仍被保留"
+        ]
+      },
+      {
+        "title": "2. Setup 注释配置交互",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "2.1 将 setup 注释栏目中的原始文件规则文本项替换为“代码文件类型”摘要展示",
+          "2.2 为 setup 增加代码文件类型层级选择器，支持分类层 Enter 进入、Space 批量切换和叶子层单项切换",
+          "2.3 在代码文件类型选择器中实现分类三态汇总显示，并设置默认启用 `C/C++` 与 `Java`",
+          "2.4 在 setup 注释栏目中加入注释缩进对齐和空白行包裹两个开关项",
+          "2.5 更新 setup 相关语言资源与状态提示，使用“代码文件类型”等新文案替代原始文件规则字符串描述"
+        ]
+      },
+      {
+        "title": "3. 注释渲染行为",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "3.1 调整 `annotate` 渲染逻辑，在启用缩进对齐时按目标代码块的有效缩进生成注释前后缀",
+          "3.2 调整变更块包裹逻辑，在关闭空白行包裹时仅围绕有效代码部分建立注释边界",
+          "3.3 让内置代码文件类型目录中启用的语言类型都能映射到有效的行注释块渲染器分发结果"
+        ]
+      },
+      {
+        "title": "4. 测试与文档",
+        "level": 2,
+        "kind": "other",
+        "content": "",
+        "items": [
+          "4.1 为 setup 代码文件类型选择器补充状态机测试，覆盖默认选中、层级导航、部分选中和保存映射",
+          "4.2 为注释渲染补充回归测试，覆盖缩进对齐开启/关闭和空白行包裹开启/关闭两组行为",
+          "4.3 更新 README、帮助示例和相关文案说明，解释新的代码文件类型选择方式与注释渲染选项"
+        ]
+      }
+    ]
+  }
+}

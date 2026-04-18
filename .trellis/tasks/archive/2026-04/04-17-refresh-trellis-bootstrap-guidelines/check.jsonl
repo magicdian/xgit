@@ -1,0 +1,6 @@
+{"file": ".agents/skills/finish-work/SKILL.md", "reason": "Finish work checklist"}
+{"file": ".agents/skills/check/SKILL.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/guides/pre-implementation-checklist.md", "reason": "Check Trellis-first boundary guidance stays accurate"}
+{"file": ".trellis/spec/guides/repository-and-conversion-state.md", "reason": "Check bootstrap and provenance claims against actual repo state"}
+{"file": ".trellis/spec/backend/rust-cli-runtime.md", "reason": "Check workflow docs stay grounded in actual runtime structure"}
+{"file": ".trellis/spec/frontend/terminal-setup-ui.md", "reason": "Check workflow docs stay grounded in actual interaction surfaces"}

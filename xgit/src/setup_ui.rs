@@ -442,7 +442,9 @@ fn handle_enter(catalog: &Catalog, config: &mut AppConfig, state: &mut SetupStat
         MenuItemKind::CodeTypeCategory(category_id) => {
             state
                 .stack
-                .push(MenuFrame::new(MenuId::CodeFileTypesEntries(category_id.to_string())));
+                .push(MenuFrame::new(MenuId::CodeFileTypesEntries(
+                    category_id.to_string(),
+                )));
             state.status = catalog.t("setup.status.enter_submenu");
         }
         MenuItemKind::CodeTypeEntry {
@@ -507,7 +509,12 @@ fn handle_space(catalog: &Catalog, config: &mut AppConfig, state: &mut SetupStat
     }
 }
 
-fn handle_editor_key(code: KeyCode, catalog: &Catalog, config: &mut AppConfig, state: &mut SetupState) {
+fn handle_editor_key(
+    code: KeyCode,
+    catalog: &Catalog,
+    config: &mut AppConfig,
+    state: &mut SetupState,
+) {
     let Some(editor) = state.editor.as_mut() else {
         return;
     };
@@ -664,7 +671,11 @@ fn draw_editor(frame: &mut ratatui::Frame, catalog: &Catalog, editor: &EditorSta
         Line::from(""),
         Line::from(catalog.t("setup.help.editor_actions")),
     ])
-    .block(Block::default().title(editor.title.clone()).borders(Borders::ALL))
+    .block(
+        Block::default()
+            .title(editor.title.clone())
+            .borders(Borders::ALL),
+    )
     .wrap(Wrap { trim: false });
     frame.render_widget(body, area);
 }
@@ -1190,7 +1201,11 @@ fn submenu_item(label: impl Into<String>, menu: MenuId) -> MenuItem {
     }
 }
 
-fn submenu_with_summary(label: impl Into<String>, summary: impl Into<String>, menu: MenuId) -> MenuItem {
+fn submenu_with_summary(
+    label: impl Into<String>,
+    summary: impl Into<String>,
+    menu: MenuId,
+) -> MenuItem {
     MenuItem {
         text: format!("--> {}: {}", label.into(), summary.into()),
         kind: MenuItemKind::Submenu(menu),
@@ -1311,7 +1326,11 @@ fn toggle_target(config: &mut AppConfig, target: ToggleTarget) {
 fn run_action(config: &mut AppConfig, state: &mut SetupState, action: Action) {
     match action {
         Action::DeleteField(field_id) => {
-            config.annotate.form.fields.retain(|field| field.id != field_id);
+            config
+                .annotate
+                .form
+                .fields
+                .retain(|field| field.id != field_id);
             if matches!(current_menu(state), MenuId::FormField(_)) && state.stack.len() > 1 {
                 state.stack.pop();
             }
@@ -1442,7 +1461,13 @@ fn apply_editor(config: &mut AppConfig, state: &mut SetupState, editor: EditorSt
             true
         }
         EditorTarget::AddOptionSet => {
-            if value.is_empty() || config.annotate.form.option_sets.contains_key(value.as_str()) {
+            if value.is_empty()
+                || config
+                    .annotate
+                    .form
+                    .option_sets
+                    .contains_key(value.as_str())
+            {
                 return false;
             }
             config
@@ -1539,10 +1564,18 @@ fn editor_title(catalog: &Catalog, target: &EditorTarget) -> String {
         EditorTarget::IdentityEmail => catalog.t("setup.field.identity.email"),
         EditorTarget::DateFormat => catalog.t("setup.field.annotate.date_format"),
         EditorTarget::TemplateStart(kind) => {
-            format!("{} / {}", catalog.t(kind.title_key()), catalog.t("setup.field.annotate.template_start"))
+            format!(
+                "{} / {}",
+                catalog.t(kind.title_key()),
+                catalog.t("setup.field.annotate.template_start")
+            )
         }
         EditorTarget::TemplateEnd(kind) => {
-            format!("{} / {}", catalog.t(kind.title_key()), catalog.t("setup.field.annotate.template_end"))
+            format!(
+                "{} / {}",
+                catalog.t(kind.title_key()),
+                catalog.t("setup.field.annotate.template_end")
+            )
         }
         EditorTarget::OldCodeLineHeader => catalog.t("setup.field.annotate.old_code_line_header"),
         EditorTarget::OldCodeLineBodyPrefix => {
@@ -1636,19 +1669,14 @@ fn field_summary(catalog: &Catalog, field: &AnnotateFormFieldConfig) -> String {
             &[("required", required), ("option_set", option_set)],
         )
     } else {
-        catalog.tf(
-            "setup.value.field_summary_text",
-            &[("required", required)],
-        )
+        catalog.tf("setup.value.field_summary_text", &[("required", required)])
     }
 }
 
 fn field_kind_text(catalog: &Catalog, kind: &AnnotateFormFieldKind) -> String {
     match kind {
         AnnotateFormFieldKind::Text => catalog.t("setup.value.field_kind.text"),
-        AnnotateFormFieldKind::SingleSelect => {
-            catalog.t("setup.value.field_kind.single_select")
-        }
+        AnnotateFormFieldKind::SingleSelect => catalog.t("setup.value.field_kind.single_select"),
     }
 }
 
@@ -1665,10 +1693,7 @@ fn feature_summary(catalog: &Catalog, config: &AppConfig) -> String {
     .count();
     catalog.tf(
         "setup.value.feature_summary",
-        &[
-            ("enabled", enabled.to_string()),
-            ("total", "5".to_string()),
-        ],
+        &[("enabled", enabled.to_string()), ("total", "5".to_string())],
     )
 }
 
@@ -1739,7 +1764,8 @@ fn old_code_mode_text(catalog: &Catalog, mode: Option<&AnnotateOldCodeMode>) -> 
 }
 
 fn old_code_processing_enabled(config: &AppConfig) -> bool {
-    config.annotate.old_code.enabled && config.annotate.old_code.mode != Some(AnnotateOldCodeMode::None)
+    config.annotate.old_code.enabled
+        && config.annotate.old_code.mode != Some(AnnotateOldCodeMode::None)
 }
 
 fn old_code_line_layout_text(catalog: &Catalog, layout: AnnotateOldCodeLineLayout) -> String {
@@ -1819,7 +1845,9 @@ fn menu_title(catalog: &Catalog, config: &AppConfig, menu: &MenuId) -> String {
             let name = categories()
                 .iter()
                 .find(|item| item.id == category_id)
-                .map(|category| localized_label(catalog, category.label_key, category.default_label))
+                .map(|category| {
+                    localized_label(catalog, category.label_key, category.default_label)
+                })
                 .unwrap_or_else(|| category_id.clone());
             catalog.tf("setup.menu.code_file_types_detail", &[("name", name)])
         }
@@ -1913,27 +1941,25 @@ fn active_help(catalog: &Catalog, config: &AppConfig, state: &SetupState) -> Set
 fn help_summary_for_item(catalog: &Catalog, config: &AppConfig, item: &MenuItem) -> String {
     let old_code_state = bool_text(catalog, old_code_processing_enabled(config));
     let key = match &item.kind {
-        MenuItemKind::Submenu(menu) | MenuItemKind::ToggleSubmenu { menu, .. } => {
-            match menu {
-                MenuId::General => Some("setup.help.summary.menu.general"),
-                MenuId::Identity => Some("setup.help.summary.menu.identity"),
-                MenuId::Annotate => Some("setup.help.summary.menu.annotate"),
-                MenuId::Features => Some("setup.help.summary.menu.features"),
-                MenuId::Push => Some("setup.help.summary.menu.push"),
-                MenuId::AnnotateForm => Some("setup.help.summary.menu.annotate_form"),
-                MenuId::CodeFileTypesCategories => Some("setup.help.summary.menu.code_file_types"),
-                MenuId::Render => Some("setup.help.summary.menu.render"),
-                MenuId::Template(TemplateKind::Add) => Some("setup.help.summary.menu.template_add"),
-                MenuId::Template(TemplateKind::Modify) => {
-                    Some("setup.help.summary.menu.template_modify")
-                }
-                MenuId::Template(TemplateKind::Delete) => {
-                    Some("setup.help.summary.menu.template_delete")
-                }
-                MenuId::OldCode => Some("setup.help.summary.menu.old_code"),
-                _ => None,
+        MenuItemKind::Submenu(menu) | MenuItemKind::ToggleSubmenu { menu, .. } => match menu {
+            MenuId::General => Some("setup.help.summary.menu.general"),
+            MenuId::Identity => Some("setup.help.summary.menu.identity"),
+            MenuId::Annotate => Some("setup.help.summary.menu.annotate"),
+            MenuId::Features => Some("setup.help.summary.menu.features"),
+            MenuId::Push => Some("setup.help.summary.menu.push"),
+            MenuId::AnnotateForm => Some("setup.help.summary.menu.annotate_form"),
+            MenuId::CodeFileTypesCategories => Some("setup.help.summary.menu.code_file_types"),
+            MenuId::Render => Some("setup.help.summary.menu.render"),
+            MenuId::Template(TemplateKind::Add) => Some("setup.help.summary.menu.template_add"),
+            MenuId::Template(TemplateKind::Modify) => {
+                Some("setup.help.summary.menu.template_modify")
             }
-        }
+            MenuId::Template(TemplateKind::Delete) => {
+                Some("setup.help.summary.menu.template_delete")
+            }
+            MenuId::OldCode => Some("setup.help.summary.menu.old_code"),
+            _ => None,
+        },
         MenuItemKind::Text(_) => Some("setup.help.summary.item.text"),
         MenuItemKind::Toggle(_) => Some("setup.help.summary.item.toggle"),
         MenuItemKind::Add(_) => Some("setup.help.summary.item.add"),
@@ -2045,9 +2071,15 @@ mod tests {
         let state = SetupState::default();
         let items = current_items(&catalog, &config, &state);
         assert_eq!(items.len(), 3);
-        assert!(items[0].text.contains(catalog.t("setup.menu.general").as_str()));
-        assert!(items[1].text.contains(catalog.t("setup.menu.identity").as_str()));
-        assert!(items[2].text.contains(catalog.t("setup.menu.annotate").as_str()));
+        assert!(items[0]
+            .text
+            .contains(catalog.t("setup.menu.general").as_str()));
+        assert!(items[1]
+            .text
+            .contains(catalog.t("setup.menu.identity").as_str()));
+        assert!(items[2]
+            .text
+            .contains(catalog.t("setup.menu.annotate").as_str()));
     }
 
     #[test]
@@ -2115,13 +2147,14 @@ mod tests {
     fn editor_and_confirm_state_override_menu_help() {
         let catalog = test_catalog();
         let config = crate::config::AppConfig::default();
-        let mut state = SetupState::default();
-
-        state.editor = Some(EditorState {
-            title: String::from("title"),
-            value: String::from("value"),
-            target: EditorTarget::IdentityName,
-        });
+        let mut state = SetupState {
+            editor: Some(EditorState {
+                title: String::from("title"),
+                value: String::from("value"),
+                target: EditorTarget::IdentityName,
+            }),
+            ..SetupState::default()
+        };
         let editor_help = active_help(&catalog, &config, &state);
         assert!(editor_help.summary.contains("Editing mode"));
         assert!(editor_help.shortcuts.contains("[Enter] Save"));
@@ -2184,16 +2217,29 @@ mod tests {
         handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
 
-        assert_eq!(super::current_menu(&state), &MenuId::CodeFileTypesCategories);
+        assert_eq!(
+            super::current_menu(&state),
+            &MenuId::CodeFileTypesCategories
+        );
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
         match super::current_menu(&state) {
             MenuId::CodeFileTypesEntries(_) => {}
             other => panic!("expected code file type entry layer, got {other:?}"),
         }
-        handle_key_code(KeyCode::Char(' '), &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char(' '),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
         assert!(state.dirty);
         handle_key_code(KeyCode::Esc, &catalog, target, &mut config, &mut state).unwrap();
-        assert_eq!(super::current_menu(&state), &MenuId::CodeFileTypesCategories);
+        assert_eq!(
+            super::current_menu(&state),
+            &MenuId::CodeFileTypesCategories
+        );
     }
 
     #[test]
@@ -2216,10 +2262,20 @@ mod tests {
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
         assert_eq!(super::current_menu(&state), &MenuId::Annotate);
 
-        handle_key_code(KeyCode::Char(' '), &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char(' '),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
         assert!(config.annotate.block_templates.add.enabled);
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
-        assert_eq!(super::current_menu(&state), &MenuId::Template(super::TemplateKind::Add));
+        assert_eq!(
+            super::current_menu(&state),
+            &MenuId::Template(super::TemplateKind::Add)
+        );
     }
 
     #[test]
@@ -2284,7 +2340,14 @@ mod tests {
         for _ in 0..4 {
             handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
         }
-        handle_key_code(KeyCode::Char(' '), &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char(' '),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
         assert!(config.annotate.block_templates.modify.enabled);
 
         // Enter template submenu and edit start template.
@@ -2294,7 +2357,14 @@ mod tests {
             &MenuId::Template(TemplateKind::Modify)
         );
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
-        handle_key_code(KeyCode::Char('X'), &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char('X'),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
         let expected = config.annotate.block_templates.modify.start.clone();
         assert!(expected.ends_with('X'));
@@ -2302,9 +2372,23 @@ mod tests {
         // Back to annotate and toggle disable -> enable.
         handle_key_code(KeyCode::Esc, &catalog, target, &mut config, &mut state).unwrap();
         assert_eq!(super::current_menu(&state), &MenuId::Annotate);
-        handle_key_code(KeyCode::Char(' '), &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char(' '),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
         assert!(!config.annotate.block_templates.modify.enabled);
-        handle_key_code(KeyCode::Char(' '), &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char(' '),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
         assert!(config.annotate.block_templates.modify.enabled);
 
         // Re-open and verify template value was preserved.
@@ -2361,19 +2445,32 @@ mod tests {
 
         handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
-        assert_eq!(super::current_menu(&state), &MenuId::ChoiceOldCodeLineLayout);
+        assert_eq!(
+            super::current_menu(&state),
+            &MenuId::ChoiceOldCodeLineLayout
+        );
 
         let items = current_items(&catalog, &config, &state);
         assert!(items[0].text.contains("[x]"));
         assert!(items[0].text.ends_with("-->"));
 
         handle_key_code(KeyCode::Down, &catalog, target, &mut config, &mut state).unwrap();
-        handle_key_code(KeyCode::Char(' '), &catalog, target, &mut config, &mut state).unwrap();
+        handle_key_code(
+            KeyCode::Char(' '),
+            &catalog,
+            target,
+            &mut config,
+            &mut state,
+        )
+        .unwrap();
         assert_eq!(
             config.annotate.old_code.line_comment.layout,
             crate::config::AnnotateOldCodeLineLayout::HeaderBody
         );
-        assert_eq!(super::current_menu(&state), &MenuId::ChoiceOldCodeLineLayout);
+        assert_eq!(
+            super::current_menu(&state),
+            &MenuId::ChoiceOldCodeLineLayout
+        );
 
         handle_key_code(KeyCode::Enter, &catalog, target, &mut config, &mut state).unwrap();
         assert_eq!(
